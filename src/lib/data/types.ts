@@ -1,3 +1,14 @@
+/** A "callout" is a (word, reading, sentence) triple the practice step uses
+ * during the morph animation. We pre-compute a handful per kanji so we can
+ * pick one at random and speak "reading → sentence". */
+export interface Callout {
+  wordJp: string;
+  wordReading: string;
+  wordMeaning: string;
+  exJp: string;
+  exEn: string;
+}
+
 export interface Kanji {
   char: string;
   strokes: number;
@@ -7,6 +18,7 @@ export interface Kanji {
   meanings: string[];
   svg: string;
   words: string[];
+  callouts: Callout[];
 }
 
 /** Segment of an example sentence. `r` (hiragana reading) is set only when

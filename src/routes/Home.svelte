@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { link } from 'svelte-spa-router';
   import { bundle } from '../lib/data/bundle';
+  import { getAllBestScores } from '../lib/data/db';
+  import { scoreBg, scoreColor } from '../lib/score/color';
 
   const b = bundle();
   const kanjiList = $derived(
@@ -13,13 +16,48 @@
 
   let filter = $state<'all' | 5 | 4>('all');
   const filtered = $derived(filter === 'all' ? kanjiList : kanjiList.filter((k) => k.jlpt === filter));
+
+  // Map of kanji char → best score (0-100). Loaded once on mount — svelte-spa-router
+  // re-mounts Home on every navigation back, so this is always fresh.
+  let bestScores = $state<Map<string, number>>(new Map());
+  let masteredCount = $derived(
+    [...bestScores.values()].filter((v) => v >= 80).length,
+  );
+  let perfectCount = $derived([...bestScores.values()].filter((v) => v >= 100).length);
+
+  onMount(async () => {
+    bestScores = await getAllBestScores();
+  });
+
+  function cellStyle(char: string): string {
+    const s = bestScores.get(char);
+    if (s === undefined) return '';
+    const border = scoreColor(s);
+    const bg = scoreBg(s);
+    return `border-color: ${border}; background: ${bg};`;
+  }
+
+  function badgeStyle(char: string): string {
+    const s = bestScores.get(char);
+    if (s === undefined) return '';
+    const c = scoreColor(s);
+    return `color: ${c}; border-color: ${c};`;
+  }
 </script>
 
 <header class="hero">
   <div class="hero-inner">
     <p class="kicker">日本語</p>
     <h1>Japanese Practice</h1>
-    <p class="muted">{counts.kanji} kanji · {counts.words.toLocaleString()} words · JLPT N5–N4</p>
+    <p class="muted">
+      {counts.kanji} kanji · {counts.words.toLocaleString()} words · JLPT N5–N4
+      {#if bestScores.size > 0}
+        <br />
+        <span class="progress-line">
+          ✓ {masteredCount} mastered · {perfectCount} perfect · {bestScores.size} attempted
+        </span>
+      {/if}
+    </p>
     <div class="cta-row">
       <a class="cta primary" href="/review" use:link>
         <span class="cta-icon">▶</span>
@@ -41,9 +79,20 @@
 
   <div class="grid">
     {#each filtered as k (k.char)}
-      <a class="cell" href={`/learn/${encodeURIComponent(k.char)}`} use:link aria-label={k.meanings.join(', ')}>
+      <a
+        class="cell"
+        class:mastered={(bestScores.get(k.char) ?? -1) >= 100}
+        href={`/learn/${encodeURIComponent(k.char)}`}
+        use:link
+        aria-label={k.meanings.join(', ')}
+        style={cellStyle(k.char)}
+      >
         <span class="ch">{k.char}</span>
-        <span class="lvl">N{k.jlpt}</span>
+        {#if bestScores.has(k.char)}
+          <span class="score-badge" style={badgeStyle(k.char)}>{bestScores.get(k.char)}</span>
+        {:else}
+          <span class="lvl">N{k.jlpt}</span>
+        {/if}
       </a>
     {/each}
   </div>
@@ -83,6 +132,13 @@
     color: var(--fg-dim);
     margin: 0 0 1.4rem;
     font-size: 0.95rem;
+    line-height: 1.5;
+  }
+  .progress-line {
+    display: inline-block;
+    margin-top: 0.3rem;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
   }
   .cta-row {
     display: flex;
@@ -149,6 +205,7 @@
     gap: 0.5rem;
   }
   .cell {
+    position: relative;
     aspect-ratio: 1 / 1;
     display: flex;
     flex-direction: column;
@@ -159,14 +216,16 @@
     border-radius: 14px;
     color: var(--fg);
     font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
-    transition: transform 0.12s, border-color 0.12s, background 0.12s;
+    transition: transform 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.2s;
   }
   .cell:hover {
-    border-color: rgba(255, 122, 89, 0.45);
     background: var(--bg-elevated);
   }
   .cell:active {
     transform: scale(0.94);
+  }
+  .cell.mastered {
+    box-shadow: 0 0 0 2px rgba(255, 210, 74, 0.4), 0 8px 22px rgba(255, 210, 74, 0.2);
   }
   .ch { font-size: 2rem; line-height: 1; }
   .lvl {
@@ -174,5 +233,20 @@
     color: var(--fg-dim);
     margin-top: 0.3rem;
     letter-spacing: 0.05em;
+  }
+  .score-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    font-family: -apple-system, 'Inter', system-ui, sans-serif;
+    font-size: 0.62rem;
+    font-weight: 700;
+    padding: 0.1rem 0.35rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    background: rgba(0, 0, 0, 0.45);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+    letter-spacing: 0.02em;
   }
 </style>

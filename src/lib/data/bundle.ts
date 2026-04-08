@@ -3,7 +3,7 @@ import type { Bundle } from './types';
 
 // Bump this when the on-the-wire shape changes so old IndexedDB caches refetch.
 // Must match the `version` field emitted by tools/build_bundle.py.
-const EXPECTED_VERSION = '2';
+const EXPECTED_VERSION = '3';
 
 let cached: Bundle | null = null;
 

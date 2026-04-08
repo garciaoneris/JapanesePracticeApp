@@ -9,21 +9,28 @@ interface Schema extends DBSchema {
     value: SrsState;
     indexes: { 'by-due': number };
   };
+  // Best practice-morph score per kanji; key is the kanji character.
+  scores: { key: string; value: number };
 }
 
 const DB_NAME = 'jp-practice';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let _db: Promise<IDBPDatabase<Schema>> | null = null;
 
 export function db(): Promise<IDBPDatabase<Schema>> {
   if (!_db) {
     _db = openDB<Schema>(DB_NAME, DB_VERSION, {
-      upgrade(database) {
-        database.createObjectStore('meta');
-        database.createObjectStore('bundle');
-        const srs = database.createObjectStore('srs', { keyPath: 'id' });
-        srs.createIndex('by-due', 'dueAt');
+      upgrade(database, oldVersion) {
+        if (oldVersion < 1) {
+          database.createObjectStore('meta');
+          database.createObjectStore('bundle');
+          const srs = database.createObjectStore('srs', { keyPath: 'id' });
+          srs.createIndex('by-due', 'dueAt');
+        }
+        if (oldVersion < 2) {
+          database.createObjectStore('scores');
+        }
       },
     });
   }
@@ -60,4 +67,32 @@ export async function dueSrs(now: number, limit = 50): Promise<SrsState[]> {
     if (out.length >= limit) break;
   }
   return out;
+}
+
+export async function getBestScore(char: string): Promise<number | undefined> {
+  const d = await db();
+  return d.get('scores', char);
+}
+
+export async function getAllBestScores(): Promise<Map<string, number>> {
+  const d = await db();
+  const out = new Map<string, number>();
+  let cursor = await d.transaction('scores').store.openCursor();
+  while (cursor) {
+    out.set(String(cursor.key), cursor.value);
+    cursor = await cursor.continue();
+  }
+  return out;
+}
+
+/** Store `score` as the new best for `char` if it beats whatever was there.
+ * Returns the resulting best (which may be the old one if it was higher). */
+export async function putBestScoreIfBetter(char: string, score: number): Promise<number> {
+  const d = await db();
+  const tx = d.transaction('scores', 'readwrite');
+  const current = (await tx.store.get(char)) ?? -1;
+  const next = Math.max(current, score);
+  if (next !== current) await tx.store.put(next, char);
+  await tx.done;
+  return next;
 }

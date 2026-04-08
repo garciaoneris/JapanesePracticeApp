@@ -5,7 +5,7 @@
   import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
-  import type { Example, Word } from '../lib/data/types';
+  import type { Example } from '../lib/data/types';
 
   interface Params {
     char: string;
@@ -32,15 +32,9 @@
     return out;
   });
 
-  // Pick a short, high-signal example word for the morph callout.
-  // Prefer the shortest word that has at least one English meaning — short words
-  // are easier for learners to retain than 4-kanji compounds.
-  const morphWord = $derived.by<Word | null>(() => {
-    const candidates = words.filter((w) => w.meanings.length > 0);
-    if (!candidates.length) return null;
-    candidates.sort((a, b) => [...a.jp].length - [...b.jp].length);
-    return candidates[0];
-  });
+  // Callouts for the morph step come pre-computed from the bundle pipeline —
+  // each kanji carries up to 4 {word, reading, sentence} triples.
+  const callouts = $derived(kanji?.callouts ?? []);
 
   type Step = 0 | 1 | 2 | 3;
   let step = $state<Step>(0);
@@ -156,7 +150,7 @@
         <h2>Draw it from memory</h2>
         <p class="hint">Draw any way you like — when you're done, your strokes will morph into the real shape.</p>
         {#key char + 'morph'}
-          <PracticeMorph {kanji} exampleWord={morphWord} />
+          <PracticeMorph {kanji} {callouts} />
         {/key}
       </div>
     {:else}

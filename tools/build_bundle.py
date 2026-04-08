@@ -56,6 +56,9 @@ class KanjiOut:
     meanings: list[str] = field(default_factory=list)
     svg: str = ""
     words: list[str] = field(default_factory=list)
+    # A handful of {word, reading, meaning, example sentence} triples the app
+    # picks from at random during the practice morph animation.
+    callouts: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -370,6 +373,51 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
             if ch in kanji:
                 kanji[ch].words.append(w.id)
 
+    # Build up to 4 "callouts" per kanji — (word, reading, meaning, sentence)
+    # triples used by the practice-morph UI. We prefer words that contain the
+    # kanji AND have at least one Tatoeba example, and we try to pick words with
+    # different readings so a learner hears more than one pronunciation.
+    for ch, k in kanji.items():
+        seen_readings: set[str] = set()
+        picked: list[dict[str, str]] = []
+        # First pass: diversify by reading.
+        for w_id in k.words:
+            if len(picked) >= 4:
+                break
+            w = words.get(w_id)
+            if w is None or not w.examples or not w.reading:
+                continue
+            if w.reading in seen_readings:
+                continue
+            seen_readings.add(w.reading)
+            ex = w.examples[0]
+            picked.append({
+                "wordJp": w.jp,
+                "wordReading": w.reading,
+                "wordMeaning": w.meanings[0] if w.meanings else "",
+                "exJp": str(ex.get("jp", "")),
+                "exEn": str(ex.get("en", "")),
+            })
+        # Second pass: fill in with any remaining words if we still have slots.
+        if len(picked) < 4:
+            for w_id in k.words:
+                if len(picked) >= 4:
+                    break
+                w = words.get(w_id)
+                if w is None or not w.examples or not w.reading:
+                    continue
+                if any(p["wordJp"] == w.jp for p in picked):
+                    continue
+                ex = w.examples[0]
+                picked.append({
+                    "wordJp": w.jp,
+                    "wordReading": w.reading,
+                    "wordMeaning": w.meanings[0] if w.meanings else "",
+                    "exJp": str(ex.get("jp", "")),
+                    "exEn": str(ex.get("en", "")),
+                })
+        k.callouts = picked
+
     if validate:
         missing_svg = [ch for ch, k in kanji.items() if not k.svg]
         if missing_svg:
@@ -379,7 +427,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     bundle = {
         # Bump whenever the schema changes — the PWA loader compares this against
         # whatever it stored in IndexedDB and refetches on mismatch.
-        "version": "2",
+        "version": "3",
         "kanji": {ch: asdict(k) for ch, k in kanji.items()},
         "words": {wid: asdict(w) for wid, w in words.items()},
     }
