@@ -1,8 +1,10 @@
 <script lang="ts">
   import { link } from 'svelte-spa-router';
   import KanjiCanvas from '../lib/ui/KanjiCanvas.svelte';
+  import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
+  import type { Example } from '../lib/data/types';
 
   interface Params {
     char: string;
@@ -12,6 +14,51 @@
   const char = $derived(decodeURIComponent(params.char));
   const kanji = $derived(bundle().kanji[char]);
   const words = $derived(kanji ? kanji.words.map((id) => bundle().words[id]).filter(Boolean) : []);
+
+  // Pull up to 4 example sentences from the kanji's vocab.
+  const examples = $derived.by<Example[]>(() => {
+    const out: Example[] = [];
+    const seen = new Set<string>();
+    for (const w of words) {
+      for (const ex of w.examples) {
+        if (seen.has(ex.jp)) continue;
+        seen.add(ex.jp);
+        out.push(ex);
+        if (out.length >= 4) return out;
+      }
+      if (out.length >= 4) return out;
+    }
+    return out;
+  });
+
+  type Step = 0 | 1 | 2 | 3;
+  let step = $state<Step>(0);
+
+  // Reset progression whenever the kanji changes.
+  $effect(() => {
+    void char;
+    step = 0;
+  });
+
+  const STEPS = [
+    { key: 'listen', label: 'Listen' },
+    { key: 'watch', label: 'Watch' },
+    { key: 'practice', label: 'Practice' },
+    { key: 'examples', label: 'Examples' },
+  ] as const;
+
+  function next() {
+    if (step < 3) step = (step + 1) as Step;
+  }
+  function prev() {
+    if (step > 0) step = (step - 1) as Step;
+  }
+
+  function speakReadings() {
+    if (!kanji) return;
+    const r = kanji.kun[0] ?? kanji.on[0] ?? kanji.char;
+    speakJa(r);
+  }
 </script>
 
 <a class="back" href="/" use:link>← Back</a>
@@ -19,90 +66,449 @@
 {#if !kanji}
   <div class="center">Unknown kanji: {char}</div>
 {:else}
-  <div class="head">
-    <h1 class="kanji-big">{kanji.char}</h1>
-    <div class="meta">
-      <span class="tag">N{kanji.jlpt}</span>
-      <span class="tag">{kanji.strokes} strokes</span>
+  <header class="head">
+    <div class="kanji-hero">
+      <span class="kanji-glyph">{kanji.char}</span>
+      <div class="hero-meta">
+        <div class="badges">
+          <span class="badge n">N{kanji.jlpt}</span>
+          <span class="badge">{kanji.strokes} strokes</span>
+        </div>
+        <p class="meaning">{kanji.meanings.slice(0, 3).join(' · ')}</p>
+      </div>
     </div>
+  </header>
+
+  <nav class="stepper" aria-label="Lesson steps">
+    {#each STEPS as s, i}
+      <button
+        class="step"
+        class:active={step === i}
+        class:done={step > i}
+        onclick={() => (step = i as Step)}
+      >
+        <span class="num">{i + 1}</span>
+        <span class="lbl">{s.label}</span>
+      </button>
+    {/each}
+  </nav>
+
+  <section class="panel">
+    {#if step === 0}
+      <!-- Step 1: Listen & meaning -->
+      <div class="listen">
+        <h2>Listen and read</h2>
+        <div class="readings-grid">
+          <div class="reading-block">
+            <div class="reading-label">On'yomi</div>
+            <div class="reading-vals">
+              {#each kanji.on as r}
+                <button class="chip" onclick={() => speakJa(r)} disabled={!ttsSupported()}>
+                  <span>{r}</span> <span class="speaker">🔊</span>
+                </button>
+              {/each}
+              {#if !kanji.on.length}<span class="muted">—</span>{/if}
+            </div>
+          </div>
+          <div class="reading-block">
+            <div class="reading-label">Kun'yomi</div>
+            <div class="reading-vals">
+              {#each kanji.kun as r}
+                <button class="chip" onclick={() => speakJa(r)} disabled={!ttsSupported()}>
+                  <span>{r}</span> <span class="speaker">🔊</span>
+                </button>
+              {/each}
+              {#if !kanji.kun.length}<span class="muted">—</span>{/if}
+            </div>
+          </div>
+        </div>
+        <div class="meaning-block">
+          <div class="reading-label">Meaning</div>
+          <p class="meaning-text">{kanji.meanings.join(', ')}</p>
+        </div>
+        <button class="primary big" onclick={speakReadings} disabled={!ttsSupported()}>
+          🔊 Hear it
+        </button>
+      </div>
+    {:else if step === 1}
+      <!-- Step 2: Watch stroke order with direction animation -->
+      <div class="watch">
+        <h2>Watch the stroke order</h2>
+        <p class="hint">Each stroke is drawn in order, from start to end.</p>
+        {#key char + 'animate'}
+          <KanjiCanvas svg={kanji.svg} mode="animate" />
+        {/key}
+      </div>
+    {:else if step === 2}
+      <!-- Step 3: Practice on a blank canvas (no ghost trace) -->
+      <div class="practice">
+        <h2>Draw it from memory</h2>
+        <p class="hint">No reference shown — draw each stroke in the correct order and direction.</p>
+        {#key char + 'blank'}
+          <KanjiCanvas svg={kanji.svg} mode="blank" />
+        {/key}
+      </div>
+    {:else}
+      <!-- Step 4: Examples with furigana + TTS -->
+      <div class="examples">
+        <h2>See it in context</h2>
+        {#if examples.length === 0}
+          <p class="muted">No example sentences for this kanji yet.</p>
+        {:else}
+          <ul>
+            {#each examples as ex (ex.jp)}
+              <li class="example-card">
+                <button class="ex-jp" onclick={() => speakJa(ex.jp)} aria-label="Speak sentence">
+                  <Furigana segments={ex.segs} />
+                  <span class="speak-tag">🔊</span>
+                </button>
+                <div class="ex-en">{ex.en}</div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
+  </section>
+
+  <div class="nav-row">
+    <button onclick={prev} disabled={step === 0}>← Back</button>
+    {#if step < 3}
+      <button class="primary" onclick={next}>Next →</button>
+    {:else if words.length}
+      <a class="btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
+    {/if}
   </div>
 
-  <section class="readings">
-    <div class="row">
-      <span class="lbl">On</span>
-      <span class="vals">
-        {#each kanji.on as r}
-          <button class="chip" onclick={() => speakJa(r)} disabled={!ttsSupported()}>{r}</button>
+  {#if step === 3 && words.length > 1}
+    <section class="words-section">
+      <h3>Words using {kanji.char}</h3>
+      <div class="word-grid">
+        {#each words.slice(0, 12) as w (w.id)}
+          <a class="word-card" href={`/vocab/${encodeURIComponent(w.id)}`} use:link>
+            <div class="w-jp">{w.jp}</div>
+            <div class="w-reading">{w.reading}</div>
+            <div class="w-en">{w.meanings[0] ?? ''}</div>
+          </a>
         {/each}
-        {#if !kanji.on.length}<span class="muted">—</span>{/if}
-      </span>
-    </div>
-    <div class="row">
-      <span class="lbl">Kun</span>
-      <span class="vals">
-        {#each kanji.kun as r}
-          <button class="chip" onclick={() => speakJa(r)} disabled={!ttsSupported()}>{r}</button>
-        {/each}
-        {#if !kanji.kun.length}<span class="muted">—</span>{/if}
-      </span>
-    </div>
-    <div class="row">
-      <span class="lbl">Meaning</span>
-      <span class="vals en">{kanji.meanings.join(', ')}</span>
-    </div>
-  </section>
-
-  <section class="practice">
-    <h2>Practice strokes</h2>
-    {#key char}
-      <KanjiCanvas svg={kanji.svg} />
-    {/key}
-  </section>
-
-  {#if words.length}
-    <section>
-      <h2>Words using {kanji.char}</h2>
-      <ul class="words">
-        {#each words as w (w.id)}
-          <li>
-            <a href={`/vocab/${encodeURIComponent(w.id)}`} use:link>
-              <span class="jp">{w.jp}</span>
-              <span class="muted">{w.reading}</span>
-              <span class="en">{w.meanings.slice(0, 2).join('; ')}</span>
-            </a>
-          </li>
-        {/each}
-      </ul>
+      </div>
     </section>
   {/if}
 {/if}
 
 <style>
-  .back { display: inline-block; padding: 0.75rem 1rem; color: var(--fg-dim); }
-  .center { padding: 2rem; text-align: center; color: var(--fg-dim); }
-  .head { text-align: center; padding: 1rem 1rem 0.5rem; }
-  .meta { display: flex; gap: 0.5rem; justify-content: center; margin-top: 0.5rem; }
-  .tag { background: var(--bg-alt); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.8rem; color: var(--fg-dim); }
-  .readings { padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
-  .row { display: flex; gap: 0.75rem; align-items: baseline; }
-  .lbl { width: 4rem; color: var(--fg-dim); font-size: 0.85rem; text-transform: uppercase; }
-  .vals { display: flex; flex-wrap: wrap; gap: 0.35rem; flex: 1; }
-  .chip { padding: 0.25rem 0.7rem; border-radius: 999px; font-size: 0.95rem; }
-  .en { color: var(--fg); }
-  .muted { color: var(--fg-dim); }
-  .practice { padding: 0.5rem 1rem 1.5rem; }
-  h2 { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-dim); margin: 0 0 0.75rem; text-align: center; }
-  .words { list-style: none; padding: 0 1rem 2rem; margin: 0; display: flex; flex-direction: column; gap: 0.4rem; }
-  .words a {
+  .back {
+    display: inline-block;
+    padding: 0.75rem 1rem;
+    color: var(--fg-dim);
+    font-size: 0.9rem;
+  }
+  .center {
+    padding: 2rem;
+    text-align: center;
+    color: var(--fg-dim);
+  }
+
+  .head {
+    padding: 0.5rem 1rem 1rem;
+  }
+  .kanji-hero {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    background: linear-gradient(135deg, rgba(255, 122, 89, 0.18), rgba(255, 122, 89, 0.04));
+    padding: 1.25rem 1.5rem;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 122, 89, 0.25);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+  }
+  .kanji-glyph {
+    font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    font-size: clamp(4.5rem, 18vw, 7.5rem);
+    line-height: 1;
+    color: var(--fg);
+    text-shadow: 0 4px 24px rgba(255, 122, 89, 0.35);
+  }
+  .hero-meta {
+    flex: 1;
+    min-width: 0;
+  }
+  .badges {
+    display: flex;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+  }
+  .badge {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border);
+    padding: 0.2rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .badge.n {
+    background: var(--accent);
+    color: #1b1b1f;
+    border-color: var(--accent);
+    font-weight: 700;
+  }
+  .meaning {
+    margin: 0.2rem 0 0;
+    color: var(--fg);
+    font-size: 1.05rem;
+    font-weight: 500;
+  }
+
+  .stepper {
     display: grid;
-    grid-template-columns: auto auto 1fr;
-    gap: 0.75rem;
-    padding: 0.6rem 0.8rem;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.4rem;
+    padding: 0.5rem 1rem 0;
+  }
+  .step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.6rem 0.4rem;
     background: var(--bg-alt);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    color: var(--fg);
-    align-items: baseline;
+    border-radius: 12px;
+    color: var(--fg-dim);
+    font-size: 0.75rem;
+    transition: all 0.2s;
   }
-  .jp { font-size: 1.2rem; }
+  .step .num {
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    background: var(--border);
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    color: var(--fg);
+    font-size: 0.85rem;
+  }
+  .step.active {
+    border-color: var(--accent);
+    background: rgba(255, 122, 89, 0.12);
+    color: var(--fg);
+  }
+  .step.active .num {
+    background: var(--accent);
+    color: #1b1b1f;
+  }
+  .step.done .num {
+    background: var(--ok);
+    color: #1b1b1f;
+  }
+  .step.done {
+    color: var(--fg);
+  }
+
+  .panel {
+    padding: 1rem;
+    min-height: 22rem;
+  }
+  .panel h2 {
+    text-align: center;
+    margin: 0 0 0.25rem;
+    font-size: 1.2rem;
+    font-weight: 600;
+  }
+  .hint {
+    text-align: center;
+    color: var(--fg-dim);
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+  }
+
+  .listen .readings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+  .reading-block,
+  .meaning-block {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 0.85rem 1rem;
+  }
+  .meaning-block {
+    margin-top: 0.75rem;
+  }
+  .reading-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+  .reading-vals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: rgba(255, 122, 89, 0.15);
+    border-color: rgba(255, 122, 89, 0.4);
+    font-size: 1rem;
+    font-family: 'Hiragino Sans', 'Yu Gothic', system-ui;
+  }
+  .chip .speaker {
+    font-size: 0.7rem;
+    opacity: 0.7;
+  }
+  .meaning-text {
+    margin: 0;
+    color: var(--fg);
+    font-size: 1.05rem;
+  }
+  .listen .primary.big {
+    display: block;
+    width: 100%;
+    margin-top: 1rem;
+    padding: 1rem;
+    font-size: 1.05rem;
+  }
+
+  .nav-row {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0 1rem 1rem;
+    justify-content: space-between;
+  }
+  .nav-row button,
+  .nav-row .btn {
+    flex: 1;
+    padding: 0.85rem;
+    font-size: 1rem;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--fg);
+    text-decoration: none;
+  }
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1b1b1f;
+    font-weight: 600;
+  }
+
+  .examples ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .example-card {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1rem;
+    transition: border-color 0.15s;
+  }
+  .example-card:hover {
+    border-color: rgba(255, 122, 89, 0.4);
+  }
+  .ex-jp {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--fg);
+    text-align: left;
+    padding: 0;
+    font-size: 1.15rem;
+  }
+  .speak-tag {
+    flex-shrink: 0;
+    font-size: 0.9rem;
+    opacity: 0.7;
+    margin-top: 0.4rem;
+  }
+  .ex-en {
+    color: var(--fg-dim);
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+    line-height: 1.35;
+  }
+
+  .words-section {
+    padding: 0.5rem 1rem 2.5rem;
+  }
+  .words-section h3 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+    margin: 0 0 0.75rem;
+    font-weight: 600;
+  }
+  .word-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.5rem;
+  }
+  .word-card {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.75rem;
+    color: var(--fg);
+    text-decoration: none;
+    transition: border-color 0.15s, transform 0.15s;
+  }
+  .word-card:active {
+    transform: scale(0.97);
+  }
+  .w-jp {
+    font-family: 'Hiragino Mincho ProN', serif;
+    font-size: 1.3rem;
+  }
+  .w-reading {
+    color: var(--fg-dim);
+    font-size: 0.8rem;
+    margin-top: 0.15rem;
+  }
+  .w-en {
+    color: var(--fg);
+    font-size: 0.8rem;
+    margin-top: 0.35rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .muted { color: var(--fg-dim); }
+
+  @media (max-width: 380px) {
+    .listen .readings-grid {
+      grid-template-columns: 1fr;
+    }
+    .step .lbl {
+      font-size: 0.7rem;
+    }
+  }
 </style>

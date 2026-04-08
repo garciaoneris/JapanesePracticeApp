@@ -1,14 +1,22 @@
 :root {
-  --bg: #1b1b1f;
-  --bg-alt: #26262d;
-  --fg: #e8e8ea;
-  --fg-dim: #9a9aa5;
+  --bg: #14141a;
+  --bg-alt: #1f1f29;
+  --bg-elevated: #262633;
+  --fg: #f0f0f5;
+  --fg-dim: #9a9aaf;
   --accent: #ff7a59;
+  --accent-soft: rgba(255, 122, 89, 0.18);
   --accent-dim: #c45a3f;
+  --indigo: #7c5cff;
+  --indigo-soft: rgba(124, 92, 255, 0.18);
   --ok: #5eca7c;
   --err: #ff6b6b;
-  --border: #35353f;
-  font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
+  --border: #33333f;
+  --border-soft: rgba(255, 255, 255, 0.06);
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.45);
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
   color-scheme: dark;
 }
 
@@ -17,12 +25,17 @@
 html, body, #app {
   margin: 0;
   padding: 0;
-  height: 100%;
-  background: var(--bg);
+  min-height: 100%;
+  background:
+    radial-gradient(ellipse at top, rgba(124, 92, 255, 0.08), transparent 50%),
+    radial-gradient(ellipse at bottom, rgba(255, 122, 89, 0.06), transparent 50%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--fg);
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
   overscroll-behavior: none;
+  font-feature-settings: 'kern' 1;
 }
 
 body {
@@ -37,14 +50,42 @@ button {
   color: inherit;
   background: var(--bg-alt);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.6em 1em;
+  border-radius: 12px;
+  padding: 0.65em 1.1em;
   cursor: pointer;
   touch-action: manipulation;
+  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
 }
-button:active { background: var(--border); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #1b1b1f; font-weight: 600; }
+button:active:not(:disabled) {
+  transform: scale(0.97);
+  background: var(--bg-elevated);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+button.primary {
+  background: linear-gradient(135deg, var(--accent), #ff5a30);
+  border-color: transparent;
+  color: #1b1b1f;
+  font-weight: 600;
+  box-shadow: 0 6px 20px rgba(255, 122, 89, 0.35);
+}
+button.primary:active:not(:disabled) {
+  background: linear-gradient(135deg, #ff8a6d, #ff6a40);
+}
 
 a { color: var(--accent); text-decoration: none; }
 
 .kanji-big { font-size: clamp(4rem, 20vw, 12rem); line-height: 1; font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif; }
+
+/* Smooth view transitions between routes */
+@view-transition { navigation: auto; }
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeInUp 0.25s ease-out;
+}

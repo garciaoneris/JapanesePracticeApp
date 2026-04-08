@@ -9,6 +9,19 @@ export interface Kanji {
   words: string[];
 }
 
+/** Segment of an example sentence. `r` (hiragana reading) is set only when
+ * the segment contains kanji the learner hasn't been introduced to yet. */
+export interface Segment {
+  t: string;
+  r: string | null;
+}
+
+export interface Example {
+  jp: string;
+  en: string;
+  segs: Segment[];
+}
+
 export interface Word {
   id: string;
   jp: string;
@@ -16,7 +29,7 @@ export interface Word {
   meanings: string[];
   pos: string[];
   kanji: string[];
-  examples: { jp: string; en: string }[];
+  examples: Example[];
 }
 
 export interface Bundle {

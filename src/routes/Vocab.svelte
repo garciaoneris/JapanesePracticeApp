@@ -1,5 +1,6 @@
 <script lang="ts">
   import { link } from 'svelte-spa-router';
+  import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { kanaMatchScore, recognizeJa, sttSupported } from '../lib/speech/stt';
@@ -86,10 +87,13 @@
       <section>
         <h2>Examples</h2>
         <ul class="examples">
-          {#each word.examples as ex}
-            <li>
-              <button class="sentence" onclick={() => speakJa(ex.jp)}>{ex.jp}</button>
-              <div class="en">{ex.en}</div>
+          {#each word.examples as ex (ex.jp)}
+            <li class="example-card">
+              <button class="sentence" onclick={() => speakJa(ex.jp)} aria-label="Speak sentence">
+                <Furigana segments={ex.segs} />
+                <span class="speak-tag">🔊</span>
+              </button>
+              <div class="ex-en">{ex.en}</div>
             </li>
           {/each}
         </ul>
@@ -135,13 +139,41 @@
     color: var(--fg);
     font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
   }
-  .examples { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.75rem; }
-  .sentence {
-    display: block;
-    width: 100%;
-    text-align: left;
-    font-size: 1.1rem;
-    padding: 0.75rem 1rem;
+  .examples { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.7rem; }
+  .example-card {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1rem;
+    transition: border-color 0.15s;
   }
-  .examples .en { text-align: left; color: var(--fg-dim); font-size: 0.9rem; margin: 0.25rem 0 0; }
+  .example-card:hover {
+    border-color: rgba(255, 122, 89, 0.4);
+  }
+  .sentence {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--fg);
+    text-align: left;
+    padding: 0;
+    font-size: 1.15rem;
+  }
+  .speak-tag {
+    flex-shrink: 0;
+    font-size: 0.9rem;
+    opacity: 0.7;
+    margin-top: 0.4rem;
+  }
+  .ex-en {
+    color: var(--fg-dim);
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+    text-align: left;
+    line-height: 1.35;
+  }
 </style>

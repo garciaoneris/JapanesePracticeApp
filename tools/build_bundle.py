@@ -34,6 +34,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from lxml import etree  # type: ignore[import-untyped]
+from pykakasi import kakasi  # type: ignore[import-untyped]
 
 KANJI_RANGE = (0x4E00, 0x9FFF)
 
@@ -65,7 +66,27 @@ class WordOut:
     meanings: list[str] = field(default_factory=list)
     pos: list[str] = field(default_factory=list)
     kanji: list[str] = field(default_factory=list)
-    examples: list[dict[str, str]] = field(default_factory=list)
+    # Each example: {"en": str, "jp": str, "segs": list[{"t": str, "r": str | None}]}
+    # `r` is set only on segments whose `t` contains kanji NOT in the target set,
+    # so the UI can render furigana exactly where the learner needs it.
+    examples: list[dict[str, object]] = field(default_factory=list)
+
+
+def segment_with_furigana(kks: object, sentence: str, known_kanji: set[str]) -> list[dict[str, str | None]]:
+    """Split a Japanese sentence into segments, attaching hiragana readings only
+    to segments containing kanji that aren't in the learner's known set."""
+    out: list[dict[str, str | None]] = []
+    for piece in kks.convert(sentence):  # type: ignore[attr-defined]
+        text = piece.get("orig", "")
+        if not text:
+            continue
+        unknown = any(is_kanji(c) and c not in known_kanji for c in text)
+        if unknown:
+            hira = piece.get("hira", "")
+            out.append({"t": text, "r": hira if hira and hira != text else None})
+        else:
+            out.append({"t": text, "r": None})
+    return out
 
 
 def parse_kanjidic(path: Path, jlpt_levels: set[int]) -> dict[str, KanjiOut]:
@@ -244,6 +265,7 @@ def attach_tatoeba(
     jp_sent_path: Path,
     en_sent_path: Path,
     links_path: Path,
+    known_kanji: set[str],
     per_word: int = 2,
     max_len: int = 40,
 ) -> None:
@@ -282,17 +304,30 @@ def attach_tatoeba(
     # This is O(sentences × vocab) but the substring check is cheap.
     vocab_forms = {w.jp: w for w in words.values()}
     vocab_list = list(vocab_forms.items())
-    attached = 0
+
+    # First pass: pick raw sentences (no segmentation yet — that's expensive).
+    picked: dict[str, list[tuple[str, str]]] = {}
     for sid, jp_text in candidates:
         for form, word in vocab_list:
-            if len(word.examples) >= per_word:
+            if word.id in picked and len(picked[word.id]) >= per_word:
                 continue
             if form in jp_text:
-                en = en_sents[jp_to_en[sid]]
-                word.examples.append({"jp": jp_text, "en": en})
-                if len(word.examples) == per_word:
-                    attached += 1
-    print(f"  attached {per_word} examples to {attached}/{len(words)} words")
+                picked.setdefault(word.id, []).append((jp_text, en_sents[jp_to_en[sid]]))
+
+    # Second pass: segment with pykakasi only the sentences we're keeping.
+    print(f"  segmenting examples with pykakasi…")
+    kks = kakasi()
+    attached = 0
+    total_examples = 0
+    for word_id, pairs in picked.items():
+        word = words[word_id]
+        for jp_text, en_text in pairs:
+            segs = segment_with_furigana(kks, jp_text, known_kanji)
+            word.examples.append({"jp": jp_text, "en": en_text, "segs": segs})
+            total_examples += 1
+        if word.examples:
+            attached += 1
+    print(f"  attached {total_examples} examples to {attached}/{len(words)} words")
 
 
 def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
@@ -327,7 +362,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
 
     allowed_kanji = set(kanji.keys())
     words = parse_jmdict(jmdict_path, allowed_kanji, vocab_whitelist)
-    attach_tatoeba(words, jpn_sent_path, eng_sent_path, links_path)
+    attach_tatoeba(words, jpn_sent_path, eng_sent_path, links_path, allowed_kanji)
 
     # Back-link words to kanji.
     for w in words.values():
@@ -342,7 +377,9 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
         print(f"counts: kanji={len(kanji)} words={len(words)} examples={sum(len(w.examples) for w in words.values())}")
 
     bundle = {
-        "version": "1",
+        # Bump whenever the schema changes — the PWA loader compares this against
+        # whatever it stored in IndexedDB and refetches on mismatch.
+        "version": "2",
         "kanji": {ch: asdict(k) for ch, k in kanji.items()},
         "words": {wid: asdict(w) for wid, w in words.items()},
     }
