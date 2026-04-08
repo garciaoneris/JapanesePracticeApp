@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# Large source datasets — build_bundle.py consumes these locally.
+tools/_data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
