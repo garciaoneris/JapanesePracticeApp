@@ -1,10 +1,11 @@
 <script lang="ts">
   import { link } from 'svelte-spa-router';
   import KanjiCanvas from '../lib/ui/KanjiCanvas.svelte';
+  import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
   import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
-  import type { Example } from '../lib/data/types';
+  import type { Example, Word } from '../lib/data/types';
 
   interface Params {
     char: string;
@@ -29,6 +30,16 @@
       if (out.length >= 4) return out;
     }
     return out;
+  });
+
+  // Pick a short, high-signal example word for the morph callout.
+  // Prefer the shortest word that has at least one English meaning — short words
+  // are easier for learners to retain than 4-kanji compounds.
+  const morphWord = $derived.by<Word | null>(() => {
+    const candidates = words.filter((w) => w.meanings.length > 0);
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => [...a.jp].length - [...b.jp].length);
+    return candidates[0];
   });
 
   type Step = 0 | 1 | 2 | 3;
@@ -140,12 +151,12 @@
         {/key}
       </div>
     {:else if step === 2}
-      <!-- Step 3: Practice on a blank canvas (no ghost trace) -->
+      <!-- Step 3: Free-form practice with morph -->
       <div class="practice">
         <h2>Draw it from memory</h2>
-        <p class="hint">No reference shown — draw each stroke in the correct order and direction.</p>
-        {#key char + 'blank'}
-          <KanjiCanvas svg={kanji.svg} mode="blank" />
+        <p class="hint">Draw any way you like — when you're done, your strokes will morph into the real shape.</p>
+        {#key char + 'morph'}
+          <PracticeMorph {kanji} exampleWord={morphWord} />
         {/key}
       </div>
     {:else}
