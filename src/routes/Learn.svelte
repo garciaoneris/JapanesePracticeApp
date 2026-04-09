@@ -124,9 +124,14 @@
       <!-- Step 1: Learn — animation + readings + TTS -->
       <div class="learn-step">
         <h2>Learn</h2>
-        {#key char + 'animate'}
-          <KanjiCanvas svg={kanji.svg} mode="animate" />
-        {/key}
+        <!-- Touching the canvas area switches to Practice so the user can
+             start drawing immediately without hunting for the Next button. -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="canvas-tap-zone" onpointerdown={() => (step = 1 as Step)}>
+          {#key char + 'animate'}
+            <KanjiCanvas svg={kanji.svg} mode="animate" />
+          {/key}
+        </div>
         <div class="readings-grid">
           <div class="reading-block">
             <div class="reading-label">On'yomi</div>
@@ -409,6 +414,22 @@
     margin-top: 1rem;
     padding: 1rem;
     font-size: 1.05rem;
+  }
+  .canvas-tap-zone {
+    cursor: pointer;
+    position: relative;
+  }
+  .canvas-tap-zone::after {
+    content: 'Tap to practice ✏️';
+    position: absolute;
+    bottom: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.75rem;
+    color: var(--fg-dim);
+    opacity: 0.6;
+    pointer-events: none;
+    font-family: -apple-system, system-ui, sans-serif;
   }
 
   .nav-row {
