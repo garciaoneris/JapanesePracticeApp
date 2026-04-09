@@ -3,13 +3,24 @@
   import type { Callout, Kanji } from '../data/types';
   import { speakJa, ttsSupported } from '../speech/tts';
   import { resample, type Point } from '../stroke/compare';
-  import { getBestScore, putBestScoreIfBetter } from '../data/db';
+  import { appendAttempt, getBestScore, getRecentAttempts, putBestScoreIfBetter } from '../data/db';
+  import { textUsesOnlyKnown } from '../data/known';
 
   interface Props {
     kanji: Kanji;
     callouts?: Callout[];
+    knownKanji?: ReadonlySet<string>;
   }
-  const { kanji, callouts = [] }: Props = $props();
+  const { kanji, callouts = [], knownKanji }: Props = $props();
+
+  // Callouts whose example sentences use only kanji the learner has mastered
+  // (plus the current kanji itself). If filtering removes everything, fall
+  // back to the full list so first-session users still hear something.
+  const filteredCallouts = $derived.by<Callout[]>(() => {
+    if (!knownKanji || knownKanji.size === 0) return callouts;
+    const kept = callouts.filter((c) => textUsesOnlyKnown(c.exJp, knownKanji, kanji.char));
+    return kept.length > 0 ? kept : callouts;
+  });
 
   // KanjiVG viewBox + how many points to resample per stroke during morph.
   const VB = 109;
@@ -45,17 +56,23 @@
     return history[history.length - 1] - history[history.length - 2];
   });
 
-  // Reset everything whenever the parent swaps to a new kanji, and load the
-  // stored best score so we can show "Best: NN" immediately.
+  // Reset everything whenever the parent swaps to a new kanji, and hydrate
+  // the persisted best + attempt history so the score strip isn't empty on
+  // first load / reload / navigation.
   $effect(() => {
     void kanji.char;
+    const char = kanji.char;
     history = [];
     seenFullMorph = false;
     currentCallout = null;
     score = null;
     best = null;
-    getBestScore(kanji.char).then((b) => {
-      if (b !== undefined) best = b;
+    getBestScore(char).then((b) => {
+      if (b !== undefined && char === kanji.char) best = b;
+    });
+    getRecentAttempts(char, HISTORY_MAX).then((attempts) => {
+      if (char !== kanji.char) return;
+      history = attempts.map((a) => a.score);
     });
     if (ctx) reset(/* keepHistory */ false);
   });
@@ -97,7 +114,10 @@
   function onDown(e: PointerEvent) {
     if (morphing) return;
     drawing = true;
-    canvas.setPointerCapture(e.pointerId);
+    // Wrap setPointerCapture: it can throw on non-trusted events (e.g. synthetic
+    // pointer events from automation harnesses). If it fails we still capture
+    // points via the move handler; we just miss out on implicit capture.
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     currentPoints = [canvasPoint(e)];
   }
 
@@ -120,12 +140,14 @@
   // ── scoring ────────────────────────────────────────────────────────
   /** Score the current user strokes against the reference paths. Returns
    * 0-100 where 100 = perfect. Penalizes missing strokes, extra strokes,
-   * and per-stroke mean distance in VB space. */
+   * and per-stroke mean distance in VB space. Defensive against NaN-producing
+   * inputs (sampling failures, zero-length paths, single-point strokes). */
   function computeScore(): number {
     if (!refPaths.length) return 0;
 
     const refSamples = refPaths.map((p) => sampleRefPath(p, RESAMPLE_N));
     const N = Math.max(userStrokes.length, refSamples.length);
+    if (N === 0) return 0;
     let distSum = 0;
 
     for (let i = 0; i < N; i++) {
@@ -142,14 +164,27 @@
         continue;
       }
       const us = resample(usr, RESAMPLE_N);
-      let local = 0;
-      for (let j = 0; j < RESAMPLE_N; j++) {
-        local += Math.hypot(us[j].x - ref[j].x, us[j].y - ref[j].y);
+      if (us.length < RESAMPLE_N) {
+        // resample() refuses if the input has < 2 points — treat like missing.
+        distSum += 45;
+        continue;
       }
-      distSum += local / RESAMPLE_N;
+      let local = 0;
+      let counted = 0;
+      for (let j = 0; j < RESAMPLE_N; j++) {
+        const dx = us[j].x - ref[j].x;
+        const dy = us[j].y - ref[j].y;
+        const d = Math.hypot(dx, dy);
+        if (Number.isFinite(d)) {
+          local += d;
+          counted += 1;
+        }
+      }
+      distSum += counted > 0 ? local / counted : 45;
     }
 
     const avg = distSum / N;
+    if (!Number.isFinite(avg)) return 0;
     // Linear mapping: avg=0 → 100, avg=40 → 0.
     const raw = 100 - avg * 2.5;
     return Math.max(0, Math.min(100, Math.round(raw)));
@@ -171,8 +206,9 @@
   }
 
   function pickRandomCallout(): Callout | null {
-    if (!callouts.length) return null;
-    return callouts[Math.floor(Math.random() * callouts.length)];
+    const pool = filteredCallouts;
+    if (!pool.length) return null;
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   function speakCallout(c: Callout) {
@@ -189,12 +225,20 @@
     const s = computeScore();
     score = s;
     history = [...history, s].slice(-HISTORY_MAX);
-    // Persist best and update the local display.
+    // Persist best and a full attempt record. Both are fire-and-forget; a
+    // storage hiccup should never block the animation.
     putBestScoreIfBetter(kanji.char, s).then((nb) => {
       best = nb;
     });
+    appendAttempt({
+      char: kanji.char,
+      score: s,
+      strokeCount: userStrokes.length,
+      requiredStrokes: refPaths.length,
+      ts: Date.now(),
+    }).catch(() => {});
 
-    // Pick a random callout and (optionally) speak it.
+    // Pick a random callout from the filtered set and (optionally) speak it.
     const callout = pickRandomCallout();
     currentCallout = callout;
     if (full && callout) speakCallout(callout);
@@ -283,9 +327,9 @@
     if (currentCallout) speakCallout(currentCallout);
   }
 
-  function tone(v: number): 'good' | 'mid' | 'bad' {
-    if (v >= 80) return 'good';
-    if (v >= 50) return 'mid';
+  function tone(v: number): 'gold' | 'mid' | 'bad' {
+    if (v >= 85) return 'gold';
+    if (v >= 60) return 'mid';
     return 'bad';
   }
 
@@ -333,23 +377,33 @@
   ></canvas>
 </div>
 
-<!-- Score + history strip -->
-{#if score !== null}
+<!-- Score + history strip. Visible whenever there's *any* signal to show:
+     a brand-new score this session, or a history strip hydrated from IDB. -->
+{#if score !== null || history.length > 0}
   <div class="score-row">
-    <div class="score-big {tone(score)}">
-      <span class="num">{score}</span>
-      <span class="lbl">/100</span>
-    </div>
+    {#if score !== null}
+      <div class="score-big {tone(score)}">
+        <span class="num">{score}</span>
+        <span class="lbl">/100</span>
+      </div>
+    {:else}
+      <div class="score-big muted-big">
+        <span class="num">–</span>
+        <span class="lbl">draw & morph</span>
+      </div>
+    {/if}
     <div class="score-side">
       <div class="history">
         {#each history as h, i (i)}
-          <span class="pill {tone(h)}" class:latest={i === history.length - 1}>{h}</span>
+          <span class="pill {tone(h)}" class:latest={i === history.length - 1 && score !== null}>{h}</span>
         {/each}
       </div>
-      {#if delta !== null}
+      {#if delta !== null && score !== null}
         <div class="delta {delta > 0 ? 'up' : delta < 0 ? 'down' : ''}">
           {delta > 0 ? '▲' : delta < 0 ? '▼' : '•'} {delta > 0 ? '+' : ''}{delta} from last
         </div>
+      {:else if score === null && history.length > 0}
+        <div class="delta muted">Past attempts from memory — draw to beat your streak.</div>
       {:else}
         <div class="delta muted">First attempt — keep going.</div>
       {/if}
@@ -474,9 +528,14 @@
     font-size: 0.85rem;
     color: var(--fg-dim);
   }
-  .score-big.good .num { color: var(--ok); }
+  .score-big.gold .num {
+    color: #ffd24a;
+    text-shadow: 0 0 18px rgba(255, 210, 74, 0.45);
+  }
   .score-big.mid  .num { color: var(--accent); }
   .score-big.bad  .num { color: var(--err); }
+  .score-big.muted-big .num { color: var(--fg-dim); }
+  .score-big.muted-big .lbl { font-size: 0.7rem; }
 
   .score-side { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
   .history {

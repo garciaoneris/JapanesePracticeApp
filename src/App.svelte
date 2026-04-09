@@ -3,6 +3,7 @@
   import Home from './routes/Home.svelte';
   import Learn from './routes/Learn.svelte';
   import Vocab from './routes/Vocab.svelte';
+  import Vocabulary from './routes/Vocabulary.svelte';
   import Review from './routes/Review.svelte';
   import NotFound from './routes/NotFound.svelte';
   import { onMount } from 'svelte';
@@ -10,6 +11,7 @@
 
   const routes = {
     '/': Home,
+    '/vocabulary': Vocabulary,
     '/learn/:char': Learn,
     '/vocab/:id': Vocab,
     '/review': Review,

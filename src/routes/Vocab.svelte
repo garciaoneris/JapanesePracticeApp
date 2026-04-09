@@ -1,15 +1,33 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { link } from 'svelte-spa-router';
   import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { kanaMatchScore, recognizeJa, sttSupported } from '../lib/speech/stt';
+  import { filterExamples, loadKnownKanji } from '../lib/data/known';
 
   interface Params {
     id: string;
   }
   const { params }: { params: Params } = $props();
   const word = $derived(bundle().words[decodeURIComponent(params.id)]);
+
+  // Known-kanji filter for the example list. The word's own kanji are always
+  // treated as "known" while viewing its page — you're looking at them right now.
+  let knownKanji = $state<Set<string>>(new Set());
+  onMount(async () => {
+    knownKanji = await loadKnownKanji();
+  });
+
+  const filteredExamples = $derived.by(() => {
+    if (!word) return { kept: [], tooAdvanced: false };
+    const effective = new Set(knownKanji);
+    for (const ch of word.kanji) effective.add(ch);
+    return filterExamples(word.examples, effective);
+  });
+  const exampleList = $derived(filteredExamples.kept);
+  const exampleTooAdvanced = $derived(filteredExamples.tooAdvanced);
 
   let listening = $state(false);
   let heard = $state<string>('');
@@ -83,11 +101,16 @@
       </section>
     {/if}
 
-    {#if word.examples.length}
+    {#if exampleList.length}
       <section>
         <h2>Examples</h2>
+        {#if exampleTooAdvanced}
+          <p class="advanced-hint">
+            These sentences include kanji you haven't mastered yet.
+          </p>
+        {/if}
         <ul class="examples">
-          {#each word.examples as ex (ex.jp)}
+          {#each exampleList as ex (ex.jp)}
             <li class="example-card">
               <button class="sentence" onclick={() => speakJa(ex.jp)} aria-label="Speak sentence">
                 <Furigana segments={ex.segs} />
@@ -138,6 +161,16 @@
     border-radius: 10px;
     color: var(--fg);
     font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+  }
+  .advanced-hint {
+    background: rgba(255, 210, 74, 0.1);
+    border: 1px solid rgba(255, 210, 74, 0.3);
+    color: #ffd24a;
+    padding: 0.65rem 0.85rem;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    margin: 0 0 0.85rem;
+    text-align: center;
   }
   .examples { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.7rem; }
   .example-card {

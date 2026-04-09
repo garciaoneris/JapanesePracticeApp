@@ -20,10 +20,12 @@
   // Map of kanji char → best score (0-100). Loaded once on mount — svelte-spa-router
   // re-mounts Home on every navigation back, so this is always fresh.
   let bestScores = $state<Map<string, number>>(new Map());
+  // "Mastered" = the known-kanji threshold used by filtering and the Vocabulary
+  // tab (>= 80). "Gold" = the new reward tier (>= 85).
   let masteredCount = $derived(
     [...bestScores.values()].filter((v) => v >= 80).length,
   );
-  let perfectCount = $derived([...bestScores.values()].filter((v) => v >= 100).length);
+  let goldCount = $derived([...bestScores.values()].filter((v) => v >= 85).length);
 
   onMount(async () => {
     bestScores = await getAllBestScores();
@@ -54,7 +56,7 @@
       {#if bestScores.size > 0}
         <br />
         <span class="progress-line">
-          ✓ {masteredCount} mastered · {perfectCount} perfect · {bestScores.size} attempted
+          ✓ {masteredCount} mastered · {goldCount} gold · {bestScores.size} attempted
         </span>
       {/if}
     </p>
@@ -62,6 +64,10 @@
       <a class="cta primary" href="/review" use:link>
         <span class="cta-icon">▶</span>
         <span>Start review</span>
+      </a>
+      <a class="cta secondary" href="/vocabulary" use:link>
+        <span class="cta-icon">📘</span>
+        <span>Vocabulary</span>
       </a>
     </div>
   </div>
@@ -81,7 +87,7 @@
     {#each filtered as k (k.char)}
       <a
         class="cell"
-        class:mastered={(bestScores.get(k.char) ?? -1) >= 100}
+        class:mastered={(bestScores.get(k.char) ?? -1) >= 85}
         href={`/learn/${encodeURIComponent(k.char)}`}
         use:link
         aria-label={k.meanings.join(', ')}
@@ -143,25 +149,32 @@
   .cta-row {
     display: flex;
     justify-content: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
   }
   .cta {
     display: inline-flex;
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.85rem 1.7rem;
+    gap: 0.55rem;
+    padding: 0.85rem 1.5rem;
     border-radius: 14px;
     font-weight: 600;
-    font-size: 1rem;
+    font-size: 0.95rem;
     color: #1b1b1f;
     background: linear-gradient(135deg, var(--accent), #ff5a30);
     box-shadow: 0 10px 28px rgba(255, 122, 89, 0.4);
     transition: transform 0.1s;
   }
+  .cta.secondary {
+    background: linear-gradient(135deg, var(--indigo), #5a3cf0);
+    color: #fff;
+    box-shadow: 0 10px 28px rgba(124, 92, 255, 0.4);
+  }
   .cta:active {
     transform: scale(0.97);
   }
   .cta-icon {
-    font-size: 0.85em;
+    font-size: 0.95em;
   }
 
   .kanji-section {

@@ -75,20 +75,47 @@ class WordOut:
     examples: list[dict[str, object]] = field(default_factory=list)
 
 
-def segment_with_furigana(kks: object, sentence: str, known_kanji: set[str]) -> list[dict[str, str | None]]:
-    """Split a Japanese sentence into segments, attaching hiragana readings only
-    to segments containing kanji that aren't in the learner's known set."""
+def segment_with_furigana(
+    kks: object,
+    sentence: str,
+    known_kanji: set[str],
+    word_by_jp: dict[str, "WordOut"] | None = None,
+) -> list[dict[str, str | None]]:
+    """Split a Japanese sentence into segments.
+
+    Each segment carries:
+      - t: surface text (the chunk from pykakasi).
+      - r: hiragana reading, only when the segment contains kanji the learner
+           hasn't been introduced to yet (used for furigana).
+      - g: English gloss from JMdict, set whenever the segment's surface form
+           matches a JMdict headword — gives the UI a word-level tooltip.
+    """
     out: list[dict[str, str | None]] = []
     for piece in kks.convert(sentence):  # type: ignore[attr-defined]
         text = piece.get("orig", "")
         if not text:
             continue
-        unknown = any(is_kanji(c) and c not in known_kanji for c in text)
+        has_kanji = any(is_kanji(c) for c in text)
+        unknown = has_kanji and any(is_kanji(c) and c not in known_kanji for c in text)
+        gloss: str | None = None
+        # Only attach a gloss to segments that actually contain a kanji — that's
+        # where the learner needs help. Pure-kana segments (は, を, あの, etc.)
+        # would otherwise get noisy or misleading first-sense JMdict matches.
+        if has_kanji and word_by_jp is not None:
+            w = word_by_jp.get(text)
+            if w is not None and w.meanings:
+                g = w.meanings[0]
+                gloss = g if len(g) <= 60 else g[:57] + "…"
+        seg: dict[str, str | None] = {
+            "t": text,
+            "r": None,
+            "g": gloss,
+        }
         if unknown:
             hira = piece.get("hira", "")
-            out.append({"t": text, "r": hira if hira and hira != text else None})
-        else:
-            out.append({"t": text, "r": None})
+            if hira and hira != text:
+                seg["r"] = hira
+        out.append(seg)
     return out
 
 
@@ -269,6 +296,7 @@ def attach_tatoeba(
     en_sent_path: Path,
     links_path: Path,
     known_kanji: set[str],
+    word_by_jp: dict[str, WordOut],
     per_word: int = 2,
     max_len: int = 40,
 ) -> None:
@@ -318,14 +346,14 @@ def attach_tatoeba(
                 picked.setdefault(word.id, []).append((jp_text, en_sents[jp_to_en[sid]]))
 
     # Second pass: segment with pykakasi only the sentences we're keeping.
-    print(f"  segmenting examples with pykakasi…")
+    print("  segmenting examples with pykakasi…")
     kks = kakasi()
     attached = 0
     total_examples = 0
     for word_id, pairs in picked.items():
         word = words[word_id]
         for jp_text, en_text in pairs:
-            segs = segment_with_furigana(kks, jp_text, known_kanji)
+            segs = segment_with_furigana(kks, jp_text, known_kanji, word_by_jp)
             word.examples.append({"jp": jp_text, "en": en_text, "segs": segs})
             total_examples += 1
         if word.examples:
@@ -365,7 +393,15 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
 
     allowed_kanji = set(kanji.keys())
     words = parse_jmdict(jmdict_path, allowed_kanji, vocab_whitelist)
-    attach_tatoeba(words, jpn_sent_path, eng_sent_path, links_path, allowed_kanji)
+
+    # Index words by their Japanese surface form so the example segmenter can
+    # look up glosses for content-words quickly.
+    word_by_jp: dict[str, WordOut] = {}
+    for w in words.values():
+        # Don't overwrite an earlier (more common) word if there's a collision.
+        word_by_jp.setdefault(w.jp, w)
+
+    attach_tatoeba(words, jpn_sent_path, eng_sent_path, links_path, allowed_kanji, word_by_jp)
 
     # Back-link words to kanji.
     for w in words.values():
@@ -427,7 +463,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     bundle = {
         # Bump whenever the schema changes — the PWA loader compares this against
         # whatever it stored in IndexedDB and refetches on mismatch.
-        "version": "3",
+        "version": "4",
         "kanji": {ch: asdict(k) for ch, k in kanji.items()},
         "words": {wid: asdict(w) for wid, w in words.items()},
     }

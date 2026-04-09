@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { link } from 'svelte-spa-router';
   import KanjiCanvas from '../lib/ui/KanjiCanvas.svelte';
   import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
+  import RevealKanji from '../lib/ui/RevealKanji.svelte';
   import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
+  import { filterExamples, loadKnownKanji } from '../lib/data/known';
   import type { Example } from '../lib/data/types';
 
   interface Params {
@@ -16,8 +19,17 @@
   const kanji = $derived(bundle().kanji[char]);
   const words = $derived(kanji ? kanji.words.map((id) => bundle().words[id]).filter(Boolean) : []);
 
-  // Pull up to 4 example sentences from the kanji's vocab.
-  const examples = $derived.by<Example[]>(() => {
+  // Set of kanji the learner has mastered (best score >= 80). Loaded on
+  // mount; the filtered-examples $derived picks it up reactively.
+  let knownKanji = $state<Set<string>>(new Set());
+  onMount(async () => {
+    knownKanji = await loadKnownKanji();
+  });
+
+  // Pull up to 8 unique example sentences from the kanji's vocab, then filter
+  // them through the known-kanji gate (treating the current kanji as known).
+  // If the gate removes everything, the fallback pair surfaces with a hint.
+  const examplesRaw = $derived.by<Example[]>(() => {
     const out: Example[] = [];
     const seen = new Set<string>();
     for (const w of words) {
@@ -25,12 +37,16 @@
         if (seen.has(ex.jp)) continue;
         seen.add(ex.jp);
         out.push(ex);
-        if (out.length >= 4) return out;
+        if (out.length >= 8) return out;
       }
-      if (out.length >= 4) return out;
+      if (out.length >= 8) return out;
     }
     return out;
   });
+
+  const filteredExamples = $derived(filterExamples(examplesRaw, knownKanji, char));
+  const examples = $derived(filteredExamples.kept.slice(0, 4));
+  const tooAdvanced = $derived(filteredExamples.tooAdvanced);
 
   // Callouts for the morph step come pre-computed from the bundle pipeline —
   // each kanji carries up to 4 {word, reading, sentence} triples.
@@ -73,7 +89,13 @@
 {:else}
   <header class="head">
     <div class="kanji-hero">
-      <span class="kanji-glyph">{kanji.char}</span>
+      {#if step === 2}
+        {#key char}
+          <RevealKanji svg={kanji.svg} strokeCount={kanji.strokes} />
+        {/key}
+      {:else}
+        <span class="kanji-glyph">{kanji.char}</span>
+      {/if}
       <div class="hero-meta">
         <div class="badges">
           <span class="badge n">N{kanji.jlpt}</span>
@@ -150,13 +172,18 @@
         <h2>Draw it from memory</h2>
         <p class="hint">Draw any way you like — when you're done, your strokes will morph into the real shape.</p>
         {#key char + 'morph'}
-          <PracticeMorph {kanji} {callouts} />
+          <PracticeMorph {kanji} {callouts} {knownKanji} />
         {/key}
       </div>
     {:else}
       <!-- Step 4: Examples with furigana + TTS -->
       <div class="examples">
         <h2>See it in context</h2>
+        {#if tooAdvanced && examples.length > 0}
+          <p class="advanced-hint">
+            These sentences include kanji you haven't mastered yet. Keep practicing and they'll clear up.
+          </p>
+        {/if}
         {#if examples.length === 0}
           <p class="muted">No example sentences for this kanji yet.</p>
         {:else}
@@ -416,6 +443,16 @@
     font-weight: 600;
   }
 
+  .advanced-hint {
+    background: rgba(255, 210, 74, 0.1);
+    border: 1px solid rgba(255, 210, 74, 0.3);
+    color: #ffd24a;
+    padding: 0.65rem 0.85rem;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    margin: 0 0 0.85rem;
+    text-align: center;
+  }
   .examples ul {
     list-style: none;
     padding: 0;

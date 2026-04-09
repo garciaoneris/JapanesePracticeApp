@@ -21,11 +21,16 @@ export interface Kanji {
   callouts: Callout[];
 }
 
-/** Segment of an example sentence. `r` (hiragana reading) is set only when
- * the segment contains kanji the learner hasn't been introduced to yet. */
+/** Segment of an example sentence.
+ *
+ * - `r` (hiragana reading) is set only when the segment contains kanji the
+ *   learner hasn't been introduced to yet (used for furigana).
+ * - `g` (English gloss) is set when the segment matches a JMdict headword,
+ *   giving the learner a word-level tooltip they can tap. */
 export interface Segment {
   t: string;
   r: string | null;
+  g?: string | null;
 }
 
 export interface Example {
@@ -60,4 +65,14 @@ export interface SrsState {
   dueAt: number;
   reps: number;
   lapses: number;
+}
+
+/** One practice-morph attempt. Persisted to the `attempts` IndexedDB store. */
+export interface Attempt {
+  id?: number;
+  char: string;
+  score: number;
+  strokeCount: number;        // how many strokes the user actually drew
+  requiredStrokes: number;    // stroke count of the reference kanji
+  ts: number;                 // Date.now() at the time of the attempt
 }
