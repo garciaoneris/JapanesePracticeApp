@@ -8,7 +8,7 @@
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { filterExamples, loadKnownKanji } from '../lib/data/known';
-  import type { Example } from '../lib/data/types';
+  import { exampleJp, type Example } from '../lib/data/types';
 
   interface Params {
     char: string;
@@ -34,8 +34,8 @@
     const seen = new Set<string>();
     for (const w of words) {
       for (const ex of w.examples) {
-        if (seen.has(ex.jp)) continue;
-        seen.add(ex.jp);
+        if (seen.has(exampleJp(ex))) continue;
+        seen.add(exampleJp(ex));
         out.push(ex);
         if (out.length >= 8) return out;
       }
@@ -188,13 +188,13 @@
           <p class="muted">No example sentences for this kanji yet.</p>
         {:else}
           <ul>
-            {#each examples as ex (ex.jp)}
+            {#each examples as ex (exampleJp(ex))}
               <li class="example-card">
                 <div class="ex-row">
                   <div
                     class="ex-jp"
-                    onclick={() => speakJa(ex.jp)}
-                    onkeydown={(e) => e.key === 'Enter' && speakJa(ex.jp)}
+                    onclick={() => speakJa(exampleJp(ex))}
+                    onkeydown={(e) => e.key === 'Enter' && speakJa(exampleJp(ex))}
                     role="button"
                     tabindex="0"
                     aria-label="Tap empty space to hear the whole sentence"
@@ -203,7 +203,7 @@
                   </div>
                   <button
                     class="speak-btn"
-                    onclick={(e) => { e.stopPropagation(); speakJa(ex.jp); }}
+                    onclick={(e) => { e.stopPropagation(); speakJa(exampleJp(ex)); }}
                     aria-label="Speak whole sentence"
                   >🔊</button>
                 </div>

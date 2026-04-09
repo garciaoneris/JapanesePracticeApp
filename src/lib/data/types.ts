@@ -12,7 +12,16 @@ export interface Callout {
 export interface Kanji {
   char: string;
   strokes: number;
-  jlpt: 4 | 5;
+  /** Modern JLPT level: 5=N5 (easiest) … 1=N1 (hardest). 0 means ungraded —
+   * not in any JLPT list but kept because it's in the jouyou/jinmeiyou set
+   * per KANJIDIC2's `grade` field. Note there's no 3 because KANJIDIC2 uses
+   * the pre-2010 JLPT scale (4 levels), and our mapping puts old level 2
+   * into modern N2 rather than splitting it across N3. */
+  jlpt: 0 | 1 | 2 | 4 | 5;
+  /** KANJIDIC2 school grade used as a finer-grained complexity tiebreaker:
+   * 1–6 = elementary (kyouiku), 8 = general jouyou, 9–10 = jinmeiyou,
+   * 0 = unknown. */
+  grade: number;
   on: string[];
   kun: string[];
   meanings: string[];
@@ -23,20 +32,32 @@ export interface Kanji {
 
 /** Segment of an example sentence.
  *
- * - `r` (hiragana reading) is set only when the segment contains kanji the
- *   learner hasn't been introduced to yet (used for furigana).
- * - `g` (English gloss) is set when the segment matches a JMdict headword,
+ * - `r` (hiragana reading): only set when the segment contains kanji AND the
+ *   reading is non-trivial. Pure-kana segments and "no-reading-available"
+ *   kanji segments simply omit the field to keep the bundle small.
+ * - `g` (English gloss): set when the segment matches a JMdict headword,
  *   giving the learner a word-level tooltip they can tap. */
 export interface Segment {
   t: string;
-  r: string | null;
-  g?: string | null;
+  r?: string;
+  g?: string;
 }
 
 export interface Example {
-  jp: string;
+  /** English translation of `segs`. */
   en: string;
+  /** Tokenized Japanese sentence. `segs.map(s => s.t).join('')` reconstructs
+   * the original sentence exactly, so we don't store `jp` separately. Use
+   * {@link exampleJp} when a joined string is needed. */
   segs: Segment[];
+}
+
+/** Join an example's segments back into the original Japanese sentence.
+ * Cheaper than storing the joined form for all ~17k examples in the bundle. */
+export function exampleJp(ex: Example): string {
+  let out = '';
+  for (const s of ex.segs) out += s.t;
+  return out;
 }
 
 export interface Word {
@@ -44,11 +65,6 @@ export interface Word {
   jp: string;
   reading: string;
   meanings: string[];
-  /** Primary JMdict POS tag for each entry in `meanings`, same length and
-   * order. Populated by the Python pipeline (fugashi + POS-aware sense
-   * picker). Optional so older v5 caches still type-check. */
-  meaning_pos?: string[];
-  pos: string[];
   kanji: string[];
   examples: Example[];
 }

@@ -6,6 +6,7 @@
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { kanaMatchScore, recognizeJa, sttSupported } from '../lib/speech/stt';
   import { filterExamples, loadKnownKanji } from '../lib/data/known';
+  import { exampleJp } from '../lib/data/types';
 
   interface Params {
     id: string;
@@ -63,7 +64,6 @@
         {word.jp}
         <rt>{word.reading}</rt>
       </ruby>
-      <div class="pos">{word.pos.join(', ')}</div>
     </header>
 
     <p class="en">{word.meanings.join('; ')}</p>
@@ -110,13 +110,13 @@
           </p>
         {/if}
         <ul class="examples">
-          {#each exampleList as ex (ex.jp)}
+          {#each exampleList as ex (exampleJp(ex))}
             <li class="example-card">
               <div class="ex-row">
                 <div
                   class="sentence"
-                  onclick={() => speakJa(ex.jp)}
-                  onkeydown={(e) => e.key === 'Enter' && speakJa(ex.jp)}
+                  onclick={() => speakJa(exampleJp(ex))}
+                  onkeydown={(e) => e.key === 'Enter' && speakJa(exampleJp(ex))}
                   role="button"
                   tabindex="0"
                   aria-label="Tap empty space to hear the whole sentence"
@@ -129,7 +129,7 @@
                 </div>
                 <button
                   class="speak-btn"
-                  onclick={(e) => { e.stopPropagation(); speakJa(ex.jp); }}
+                  onclick={(e) => { e.stopPropagation(); speakJa(exampleJp(ex)); }}
                   aria-label="Speak whole sentence"
                 >🔊</button>
               </div>
@@ -149,7 +149,6 @@
   header { text-align: center; padding: 0.5rem 0 1rem; }
   .jp { font-size: 3rem; font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif; }
   .jp rt { font-size: 1rem; color: var(--fg-dim); }
-  .pos { color: var(--fg-dim); font-size: 0.85rem; margin-top: 0.25rem; }
   .en { text-align: center; font-size: 1.1rem; margin: 0.5rem 0 1rem; }
   .actions { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
   .stt {

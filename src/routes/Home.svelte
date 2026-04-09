@@ -6,15 +6,30 @@
   import { scoreBg, scoreColor } from '../lib/score/color';
 
   const b = bundle();
+  // Progressive curriculum order. Primary key is JLPT level descending so N5
+  // (5) comes first and ungraded (0) comes last. Within a level we tiebreak
+  // on school grade ascending (1=elementary kyouiku, 8=general jouyou,
+  // 9–10=jinmeiyou) then stroke count ascending. `grade === 0` gets pushed
+  // to the end of its level with a sentinel of 99.
   const kanjiList = $derived(
-    Object.values(b.kanji).sort((a, c) => c.jlpt - a.jlpt || a.strokes - c.strokes),
+    Object.values(b.kanji).sort((a, c) => {
+      if (c.jlpt !== a.jlpt) return c.jlpt - a.jlpt;
+      const ag = a.grade || 99;
+      const cg = c.grade || 99;
+      if (ag !== cg) return ag - cg;
+      return a.strokes - c.strokes;
+    }),
   );
   const counts = $derived({
     kanji: Object.keys(b.kanji).length,
     words: Object.keys(b.words).length,
   });
 
-  let filter = $state<'all' | 5 | 4>('all');
+  // Filter chips: All | N5 | N4 | N2 | N1 | — (ungraded). There's no N3 chip
+  // because KANJIDIC2 uses the pre-2010 four-level JLPT scale and our mapping
+  // folds old level 2 into modern N2 rather than splitting it.
+  type JlptFilter = 'all' | 5 | 4 | 2 | 1 | 0;
+  let filter = $state<JlptFilter>('all');
   const filtered = $derived(filter === 'all' ? kanjiList : kanjiList.filter((k) => k.jlpt === filter));
 
   // Map of kanji char → best score (0-100). Loaded once on mount — svelte-spa-router
@@ -68,7 +83,7 @@
     <p class="kicker">日本語</p>
     <h1>Japanese Practice</h1>
     <p class="muted">
-      {counts.kanji} kanji · {counts.words.toLocaleString()} words · JLPT N5–N4
+      {counts.kanji} kanji · {counts.words.toLocaleString()} words · JLPT N5–N1
       {#if bestScores.size > 0}
         <br />
         <span class="progress-line">
@@ -96,6 +111,9 @@
       <button class:active={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
       <button class:active={filter === 5} onclick={() => (filter = 5)}>N5</button>
       <button class:active={filter === 4} onclick={() => (filter = 4)}>N4</button>
+      <button class:active={filter === 2} onclick={() => (filter = 2)}>N2</button>
+      <button class:active={filter === 1} onclick={() => (filter = 1)}>N1</button>
+      <button class:active={filter === 0} onclick={() => (filter = 0)} title="Jouyou / jinmeiyou kanji without a JLPT tag">—</button>
     </div>
   </div>
 

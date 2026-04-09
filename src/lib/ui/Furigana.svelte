@@ -140,7 +140,7 @@
         role={seg.g ? 'button' : undefined}
         tabindex={seg.g ? 0 : undefined}
       >
-        {seg.t}<rt>{seg.r}</rt>
+        {seg.t}<rt>{seg.r ?? ''}</rt>
       </ruby>
     {:else if mode === 'plain-glossed'}
       <span

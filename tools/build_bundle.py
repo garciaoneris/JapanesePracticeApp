@@ -27,14 +27,63 @@ JSON blob the PWA loads on first run.
 from __future__ import annotations
 
 import argparse
-import json
+import os
 import re
-from collections import defaultdict
-from dataclasses import asdict, dataclass, field
+import time
+from dataclasses import dataclass, field
+from multiprocessing import Pool
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import ahocorasick  # type: ignore[import-untyped]
 import fugashi  # type: ignore[import-untyped]
+import orjson
 from lxml import etree  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+_PHASE_TIMES: dict[str, float] = {}
+
+
+def _timed(label: str, t_start: float) -> float:
+    """Record and print elapsed time for a build phase. Returns a fresh t0."""
+    dt = time.perf_counter() - t_start
+    _PHASE_TIMES[label] = _PHASE_TIMES.get(label, 0.0) + dt
+    print(f"  [timing] {label}: {dt:.2f}s")
+    return time.perf_counter()
+
+
+# Worker-process globals for the parallel fugashi segmentation pass. Each
+# worker lazy-inits its own Tagger + shared lookup dicts once on startup, then
+# reuses them across every task in its chunk so we don't pay per-task pickling.
+_WORKER_TAGGER: "fugashi.Tagger | None" = None
+_WORKER_WORD_BY_JP: "dict[str, WordOut] | None" = None
+_WORKER_KANJI_MEANINGS: "dict[str, list[str]] | None" = None
+
+
+def _seg_worker_init(
+    word_by_jp: "dict[str, WordOut]",
+    kanji_meanings: dict[str, list[str]],
+) -> None:
+    """Pool initializer: build one fugashi Tagger per worker process and stash
+    the lookup dicts in module-level globals so _seg_worker_task can see them
+    without having to re-pickle them on every task."""
+    global _WORKER_TAGGER, _WORKER_WORD_BY_JP, _WORKER_KANJI_MEANINGS
+    _WORKER_TAGGER = fugashi.Tagger()
+    _WORKER_WORD_BY_JP = word_by_jp
+    _WORKER_KANJI_MEANINGS = kanji_meanings
+
+
+def _seg_worker_task(args: tuple[str, str, str]) -> tuple[str, dict[str, object]]:
+    """Pool worker: segment one sentence with the per-process Tagger and
+    return (word_id, example_dict) back to the parent."""
+    word_id, jp_text, en_text = args
+    assert _WORKER_TAGGER is not None  # set by _seg_worker_init
+    segs = segment_with_furigana(
+        _WORKER_TAGGER, jp_text, _WORKER_WORD_BY_JP, _WORKER_KANJI_MEANINGS
+    )
+    return word_id, {"jp": jp_text, "en": en_text, "segs": segs}
 
 KANJI_RANGE = (0x4E00, 0x9FFF)
 
@@ -130,7 +179,12 @@ def pick_gloss(word: "WordOut", category: str) -> str | None:
 class KanjiOut:
     char: str
     strokes: int
+    # Modern JLPT level, 5=easiest (N5) .. 1=hardest (N1). 0 means "no JLPT
+    # level assigned but this kanji is in the jouyou or jinmeiyou set".
     jlpt: int
+    # KANJIDIC2 grade: 1-6 = kyouiku (elementary), 8 = general jouyou,
+    # 9-10 = jinmeiyou, 0 = unknown. Used as a secondary sort key.
+    grade: int = 0
     on: list[str] = field(default_factory=list)
     kun: list[str] = field(default_factory=list)
     meanings: list[str] = field(default_factory=list)
@@ -163,21 +217,22 @@ def segment_with_furigana(
     sentence: str,
     word_by_jp: dict[str, "WordOut"] | None = None,
     kanji_meanings: dict[str, list[str]] | None = None,
-) -> list[dict[str, str | None]]:
+) -> list[dict[str, str]]:
     """Split a Japanese sentence into segments using fugashi + UniDic-lite.
 
-    Each segment carries:
-      - t: surface text (the token from fugashi).
-      - r: hiragana reading — populated on every kanji-containing segment,
-           sourced from UniDic's surface-aligned `kana` feature, so compound
-           words (e.g., 火山列島 → かざんれっとう) read correctly.
-      - g: English gloss, populated on every kanji-containing segment. Tries
-           JMdict with the surface form first, then with the dictionary form
-           (`orthBase`, e.g., 出掛けて → 出掛ける), then falls back to a
-           concatenation of per-kanji KANJIDIC2 meanings. The JMdict pick
-           uses the token's part-of-speech to prefer a matching sense.
+    Each segment is a dict with:
+      - t: surface text (the token from fugashi). Always present.
+      - r: hiragana reading. OPTIONAL — only emitted for kanji segments that
+           have a non-trivial reading. Pure-kana segments omit it entirely to
+           keep the bundle small.
+      - g: English gloss. OPTIONAL — only emitted for kanji segments where
+           JMdict or the per-char fallback produced something.
+
+    Dropping the keys when there's nothing to store (instead of setting them
+    to `null`) shaves a few megabytes off the final bundle because every
+    segment otherwise carried `"r":null,"g":null`.
     """
-    out: list[dict[str, str | None]] = []
+    out: list[dict[str, str]] = []
     for tok in tagger(sentence):
         surface: str = tok.surface
         if not surface:
@@ -222,11 +277,32 @@ def segment_with_furigana(
                     g2 = " / ".join(parts)
                     gloss = g2 if len(g2) <= 60 else g2[:57] + "…"
 
-        out.append({"t": surface, "r": reading, "g": gloss})
+        seg: dict[str, str] = {"t": surface}
+        if reading:
+            seg["r"] = reading
+        if gloss:
+            seg["g"] = gloss
+        out.append(seg)
     return out
 
 
-def parse_kanjidic(path: Path, jlpt_levels: set[int]) -> dict[str, KanjiOut]:
+def parse_kanjidic(path: Path) -> dict[str, KanjiOut]:
+    """Parse every kanji from KANJIDIC2 that has EITHER a JLPT level OR a
+    school grade (jouyou 1-8, jinmeiyou 9-10). That's ~2500 kanji covering
+    the entire JLPT curriculum plus all daily-use kanji. Kanji without any
+    tag are skipped — they're too obscure for a learner-facing app.
+
+    The `jlpt` field stored on each KanjiOut is the MODERN N5-N1 scale
+    (5=easiest, 1=hardest) mapped from KANJIDIC2's pre-2010 levels, or 0
+    for "no JLPT level — shown as plain jouyou in the UI".
+
+    Old JLPT 4 → modern N5
+    Old JLPT 3 → modern N4
+    Old JLPT 2 → modern N2 (note: modern N3 didn't exist pre-2010; the old
+                            level 2 was broader than modern N2 alone, but
+                            this is the closest single-level mapping)
+    Old JLPT 1 → modern N1
+    """
     print(f"Parsing KANJIDIC2: {path}")
     tree = etree.parse(str(path))
     out: dict[str, KanjiOut] = {}
@@ -235,23 +311,33 @@ def parse_kanjidic(path: Path, jlpt_levels: set[int]) -> dict[str, KanjiOut]:
         if not is_kanji(literal):
             continue
         misc = ch_el.find("misc")
-        jlpt_el = misc.find("jlpt") if misc is not None else None
-        if jlpt_el is None or jlpt_el.text is None:
+        if misc is None:
             continue
-        try:
-            jlpt = int(jlpt_el.text)
-        except ValueError:
+
+        jlpt_el = misc.find("jlpt")
+        jlpt_old: int | None = None
+        if jlpt_el is not None and jlpt_el.text:
+            try:
+                jlpt_old = int(jlpt_el.text)
+            except ValueError:
+                pass
+
+        grade_el = misc.find("grade")
+        grade: int | None = None
+        if grade_el is not None and grade_el.text:
+            try:
+                grade = int(grade_el.text)
+            except ValueError:
+                pass
+
+        # Keep if the kanji is curriculum-worthy: JLPT-tagged or jouyou/jinmei.
+        if jlpt_old is None and grade is None:
             continue
-        if jlpt not in jlpt_levels:
-            continue
-        strokes_el = misc.find("stroke_count") if misc is not None else None
+
+        strokes_el = misc.find("stroke_count")
         strokes = int(strokes_el.text) if strokes_el is not None and strokes_el.text else 0
 
-        # Map pre-2010 JLPT levels (1-4) to modern levels (N5 easiest, N1 hardest):
-        #   old 4 -> modern 5 (N5)
-        #   old 3 -> modern 4 (N4)
-        # This is a lossy approximation but matches the UI labels the app uses.
-        modern_jlpt = {4: 5, 3: 4}.get(jlpt, jlpt)
+        modern_jlpt = {4: 5, 3: 4, 2: 2, 1: 1}.get(jlpt_old or -1, 0)
 
         on: list[str] = []
         kun: list[str] = []
@@ -270,8 +356,22 @@ def parse_kanjidic(path: Path, jlpt_levels: set[int]) -> dict[str, KanjiOut]:
                 if m.get("m_lang") is None and m.text:
                     meanings.append(m.text)
 
-        out[literal] = KanjiOut(char=literal, strokes=strokes, jlpt=modern_jlpt, on=on, kun=kun, meanings=meanings)
-    print(f"  kept {len(out)} kanji at JLPT {sorted(jlpt_levels)}")
+        out[literal] = KanjiOut(
+            char=literal,
+            strokes=strokes,
+            jlpt=modern_jlpt,
+            grade=grade or 0,
+            on=on,
+            kun=kun,
+            meanings=meanings,
+        )
+
+    # Per-level counts for the build log.
+    by_level: dict[int, int] = {}
+    for k in out.values():
+        by_level[k.jlpt] = by_level.get(k.jlpt, 0) + 1
+    level_str = ", ".join(f"N{lv}={n}" if lv else f"un={n}" for lv, n in sorted(by_level.items(), reverse=True))
+    print(f"  kept {len(out)} kanji ({level_str})")
     return out
 
 
@@ -295,12 +395,17 @@ def parse_kanjivg(path: Path, chars: set[str]) -> dict[str, str]:
         if not paths:
             continue
 
-        svg_paths = "\n".join(
-            f'<path d="{d}" stroke="currentColor" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />'
-            for d in paths
-            if d
+        # Hoist the stroke presentation attributes onto the <svg> root instead
+        # of repeating them on every <path>. SVG presentation attributes
+        # inherit, so visual output is identical but we save ~85 bytes per
+        # stroke × ~15 strokes per kanji × 2900 kanji ≈ 3.7 MB off the bundle.
+        svg_paths = "".join(f'<path d="{d}"/>' for d in paths if d)
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 109 109" '
+            'stroke="currentColor" fill="none" stroke-width="3" '
+            'stroke-linecap="round" stroke-linejoin="round">'
+            f"{svg_paths}</svg>"
         )
-        svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 109 109">{svg_paths}</svg>'
         out[ch] = svg
 
     print(f"  got stroke SVG for {len(out)} kanji")
@@ -411,7 +516,9 @@ def attach_tatoeba(
     links_path: Path,
     word_by_jp: dict[str, WordOut],
     kanji_meanings: dict[str, list[str]],
-    per_word: int = 2,
+    *,
+    include_word_ids: "set[str] | None" = None,
+    per_word: int = 1,
     max_len: int = 40,
 ) -> None:
     if not all(p.exists() for p in (jp_sent_path, en_sent_path, links_path)):
@@ -419,6 +526,7 @@ def attach_tatoeba(
         return
 
     print(f"Parsing Tatoeba: {jp_sent_path.name}, {en_sent_path.name}, {links_path.name}")
+    t0 = time.perf_counter()
     jp_sents = _load_lang_sentences(jp_sent_path)
     en_sents = _load_lang_sentences(en_sent_path)
     print(f"  jp sentences: {len(jp_sents)}, en sentences: {len(en_sents)}")
@@ -437,6 +545,7 @@ def attach_tatoeba(
             if a not in jp_to_en and a in jp_sents and b in en_sents:
                 jp_to_en[a] = b
     print(f"  jpn->eng links: {len(jp_to_en)}")
+    t0 = _timed("tatoeba_load", t0)
 
     # Only consider jp sentences that have a short length and an English translation.
     candidates = [
@@ -445,41 +554,85 @@ def attach_tatoeba(
         if len(jp_sents[sid]) <= max_len
     ]
 
-    # Build inverted index: for every word-form in our vocab, the list of sentence IDs that contain it.
-    # This is O(sentences × vocab) but the substring check is cheap.
-    vocab_forms = {w.jp: w for w in words.values()}
-    vocab_list = list(vocab_forms.items())
+    # Build an Aho–Corasick automaton over every vocab surface form. This
+    # turns the first pass from O(candidates × vocab) substring checks into a
+    # single O(text) sweep per candidate sentence, which is ~30–100× faster
+    # on the 29k-word / 50k-sentence scale we hit after the kanji expansion.
+    #
+    # include_word_ids lets the caller restrict which words are eligible for
+    # examples at all — we skip rare-kanji-only words to shrink the bundle.
+    if include_word_ids is not None:
+        vocab_forms: dict[str, WordOut] = {
+            w.jp: w
+            for w in words.values()
+            if w.jp and w.id in include_word_ids
+        }
+    else:
+        vocab_forms = {w.jp: w for w in words.values() if w.jp}
+    automaton = ahocorasick.Automaton()
+    for form in vocab_forms:
+        automaton.add_word(form, form)
+    automaton.make_automaton()
 
     # First pass: pick raw sentences (no segmentation yet — that's expensive).
     picked: dict[str, list[tuple[str, str]]] = {}
     for sid, jp_text in candidates:
-        for form, word in vocab_list:
-            if word.id in picked and len(picked[word.id]) >= per_word:
+        # The automaton returns one hit per occurrence, so dedupe forms that
+        # appear multiple times in the same sentence (the old loop checked
+        # each form at most once per sentence).
+        seen_here: set[str] = set()
+        for _end, form in automaton.iter(jp_text):
+            if form in seen_here:
                 continue
-            if form in jp_text:
-                picked.setdefault(word.id, []).append((jp_text, en_sents[jp_to_en[sid]]))
+            seen_here.add(form)
+            word = vocab_forms[form]
+            if len(picked.get(word.id, [])) >= per_word:
+                continue
+            picked.setdefault(word.id, []).append((jp_text, en_sents[jp_to_en[sid]]))
+    t0 = _timed("tatoeba_substring_match", t0)
 
-    # Second pass: segment with fugashi/UniDic only the sentences we're keeping.
-    print("  segmenting examples with fugashi + UniDic…")
-    tagger = fugashi.Tagger()
-    attached = 0
+    # Second pass: segment with fugashi/UniDic only the sentences we're
+    # keeping. Each per-sentence tagger call is ~1–5 ms; on this machine
+    # (12 cores) parallelizing across a Pool gives ~7× on the segmentation
+    # phase even after paying ~1–2 s per-worker UniDic warmup.
+    tasks: list[tuple[str, str, str]] = [
+        (word_id, jp_text, en_text)
+        for word_id, pairs in picked.items()
+        for jp_text, en_text in pairs
+    ]
     total_examples = 0
-    for word_id, pairs in picked.items():
-        word = words[word_id]
-        for jp_text, en_text in pairs:
+
+    if len(tasks) < 500:
+        # Small workloads: skip the pool overhead entirely.
+        print("  segmenting examples with fugashi + UniDic (single-process)…")
+        tagger = fugashi.Tagger()
+        for word_id, jp_text, en_text in tasks:
             segs = segment_with_furigana(tagger, jp_text, word_by_jp, kanji_meanings)
-            word.examples.append({"jp": jp_text, "en": en_text, "segs": segs})
+            words[word_id].examples.append({"jp": jp_text, "en": en_text, "segs": segs})
             total_examples += 1
-        if word.examples:
-            attached += 1
+    else:
+        n_workers = max(1, (os.cpu_count() or 2) - 1)
+        print(
+            f"  segmenting examples with fugashi + UniDic "
+            f"({n_workers}-worker pool over {len(tasks)} examples)…"
+        )
+        with Pool(
+            processes=n_workers,
+            initializer=_seg_worker_init,
+            initargs=(word_by_jp, kanji_meanings),
+        ) as pool:
+            for word_id, example in pool.imap_unordered(
+                _seg_worker_task, tasks, chunksize=64
+            ):
+                words[word_id].examples.append(example)
+                total_examples += 1
+
+    attached = sum(1 for w in words.values() if w.examples)
     print(f"  attached {total_examples} examples to {attached}/{len(words)} words")
+    _timed("tatoeba_segment", t0)
 
 
 def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
-    # KANJIDIC2 uses the PRE-2010 4-level JLPT scale (1=hardest, 4=easiest).
-    # Modern N5 ~ old level 4; modern N5+N4 ~ old levels 4 + 3.
-    jlpt_levels = {3, 4}
-
     kanjidic_path = data_dir / "kanjidic2.xml"
     kanjivg_path = next(data_dir.glob("kanjivg-*.xml"), None) or data_dir / "kanjivg.xml"
     jmdict_path = data_dir / "JMdict_e"
@@ -500,13 +653,17 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     else:
         print("No vocab whitelist found; filtering JMdict by priority tags (ichi1/news1/spec1/gai1)")
 
-    kanji = parse_kanjidic(kanjidic_path, jlpt_levels)
+    t_build0 = time.perf_counter()
+    kanji = parse_kanjidic(kanjidic_path)
+    t_build0 = _timed("parse_kanjidic", t_build0)
     svgs = parse_kanjivg(kanjivg_path, set(kanji.keys()))
     for ch, k in kanji.items():
         k.svg = svgs.get(ch, "")
+    t_build0 = _timed("parse_kanjivg", t_build0)
 
     allowed_kanji = set(kanji.keys())
     words = parse_jmdict(jmdict_path, allowed_kanji, vocab_whitelist)
+    t_build0 = _timed("parse_jmdict", t_build0)
 
     # Index words by their Japanese surface form so the example segmenter can
     # look up glosses quickly. JMdict sometimes has TWO entries sharing a
@@ -532,7 +689,40 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     # form isn't in JMdict. Covers every kanji we know about, not just N5/N4.
     kanji_meanings: dict[str, list[str]] = {ch: k.meanings for ch, k in kanji.items()}
 
-    attach_tatoeba(words, jpn_sent_path, eng_sent_path, links_path, word_by_jp, kanji_meanings)
+    # Pick which words are eligible to get Tatoeba example sentences attached.
+    # With the full curriculum kanji set the unfiltered bundle is ~38 MB,
+    # blowing past the 15 MB service-worker precache cap. To fit we skip
+    # examples for words that contain ANY N1 or ungraded kanji — i.e. we
+    # only give examples to words a learner at N2-or-easier can *fully*
+    # read. Kana-only words are always included so common particles and
+    # interjections still carry examples.
+    #
+    # modern jlpt: 5=N5 (easiest) .. 1=N1 (hardest), 0=ungraded.
+    CORE_JLPT_THRESHOLD = 2  # every kanji in the word must be N2 or easier
+    include_word_ids: set[str] = set()
+    for wid, w in words.items():
+        word_kanji_levels = [kanji[c].jlpt for c in w.kanji if c in kanji]
+        if not word_kanji_levels:
+            include_word_ids.add(wid)  # kana-only — always eligible
+            continue
+        if all(lv >= CORE_JLPT_THRESHOLD for lv in word_kanji_levels):
+            include_word_ids.add(wid)
+    print(
+        f"  {len(include_word_ids)}/{len(words)} words eligible for examples "
+        f"(all kanji N2 or easier, or kana-only)"
+    )
+    t_build0 = _timed("build_word_indexes", t_build0)
+
+    attach_tatoeba(
+        words,
+        jpn_sent_path,
+        eng_sent_path,
+        links_path,
+        word_by_jp,
+        kanji_meanings,
+        include_word_ids=include_word_ids,
+    )
+    t_build0 = time.perf_counter()  # attach_tatoeba prints its own sub-phases
 
     # Back-link words to kanji.
     for w in words.values():
@@ -585,25 +775,71 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
                 })
         k.callouts = picked
 
+    t_build0 = _timed("callouts_and_backlinks", t_build0)
+
     if validate:
         missing_svg = [ch for ch, k in kanji.items() if not k.svg]
         if missing_svg:
             print(f"WARNING: {len(missing_svg)} kanji missing SVG: {''.join(missing_svg[:20])}…")
         print(f"counts: kanji={len(kanji)} words={len(words)} examples={sum(len(w.examples) for w in words.values())}")
 
-    bundle = {
-        # Bump whenever the schema changes — the PWA loader compares this against
-        # whatever it stored in IndexedDB and refetches on mismatch.
-        "version": "6",
-        "kanji": {ch: asdict(k) for ch, k in kanji.items()},
-        "words": {wid: asdict(w) for wid, w in words.items()},
+    # Build the runtime dicts explicitly so we can drop build-time-only
+    # fields like `meaning_pos` (used by the Python POS-aware sense picker
+    # but never read by the Svelte app). Bumped to "7" because the
+    # curriculum expansion from ~284 to ~2900 kanji means every cached
+    # client needs to refetch.
+    bundle_obj: dict[str, object] = {
+        "version": "7",
+        "kanji": {
+            ch: {
+                "char": k.char,
+                "strokes": k.strokes,
+                "jlpt": k.jlpt,
+                "grade": k.grade,
+                "on": k.on,
+                "kun": k.kun,
+                "meanings": k.meanings,
+                "svg": k.svg,
+                "words": k.words,
+                "callouts": k.callouts,
+            }
+            for ch, k in kanji.items()
+        },
+        "words": {
+            wid: {
+                "id": w.id,
+                "jp": w.jp,
+                "reading": w.reading,
+                "meanings": w.meanings,
+                # meaning_pos and pos are intentionally omitted — meaning_pos
+                # is build-time only, pos was ~1.4 MB of Vocab-card display
+                # text that we can live without.
+                "kanji": w.kanji,
+                # examples keep segs + en but drop jp because segs.map(t)
+                # exactly reconstructs it; the frontend has an exampleJp()
+                # helper for the call sites that need a joined string.
+                "examples": [
+                    {"en": ex["en"], "segs": ex["segs"]}
+                    for ex in w.examples
+                ],
+            }
+            for wid, w in words.items()
+        },
     }
+    t_build0 = _timed("build_bundle_dict", t_build0)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(bundle, f, ensure_ascii=False, separators=(",", ":"))
+    out_bytes = orjson.dumps(bundle_obj)
+    out_path.write_bytes(out_bytes)
     size_mb = out_path.stat().st_size / (1024 * 1024)
     print(f"Wrote {out_path} ({size_mb:.2f} MB)")
+    _timed("serialize_json", t_build0)
+
+    # Totals
+    total = sum(_PHASE_TIMES.values())
+    print(f"\n=== phase totals ({total:.1f}s) ===")
+    for k, v in sorted(_PHASE_TIMES.items(), key=lambda kv: -kv[1]):
+        print(f"  {k:32} {v:7.2f}s  ({100 * v / total:5.1f}%)")
 
 
 def main() -> None:

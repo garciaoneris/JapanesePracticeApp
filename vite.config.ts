@@ -16,8 +16,11 @@ export default defineConfig({
       injectRegister: 'auto',
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,webmanifest,json}'],
-        // bundle.json is several MB; bump the default 2 MB cap.
-        maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
+        // bundle.json is ~15 MB with the full N5–N1 curriculum; bump the
+        // Workbox default (2 MB) cap so it precaches in full. 20 MB leaves
+        // a little headroom for future vocabulary additions without needing
+        // to retouch this config every release.
+        maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
         navigateFallback: `${base}index.html`,
       },
       manifest: {
