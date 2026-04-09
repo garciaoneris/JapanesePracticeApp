@@ -33,8 +33,8 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import fugashi  # type: ignore[import-untyped]
 from lxml import etree  # type: ignore[import-untyped]
-from pykakasi import kakasi  # type: ignore[import-untyped]
 
 KANJI_RANGE = (0x4E00, 0x9FFF)
 
@@ -44,6 +44,86 @@ def is_kanji(ch: str) -> bool:
         return False
     cp = ord(ch)
     return KANJI_RANGE[0] <= cp <= KANJI_RANGE[1]
+
+
+def katakana_to_hiragana(s: str) -> str:
+    """Shift katakana code points down to hiragana. Chars outside the
+    katakana block (U+30A1..U+30F6) pass through unchanged."""
+    out: list[str] = []
+    for ch in s:
+        cp = ord(ch)
+        if 0x30A1 <= cp <= 0x30F6:
+            out.append(chr(cp - 0x60))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def fugashi_to_category(pos1: str) -> str:
+    """Map fugashi/UniDic pos1 to a JMdict-searchable category tag. Empty
+    string means 'no preference — prefer noun senses, then first-listed'."""
+    if pos1.startswith("名詞"):
+        return "noun"
+    if pos1.startswith("動詞") or pos1.startswith("助動詞"):
+        return "verb"
+    if pos1.startswith("形容詞"):
+        return "adj-i"
+    if pos1.startswith("形状詞"):
+        return "adj-na"
+    if pos1.startswith("副詞"):
+        return "adv"
+    if pos1.startswith("接続詞"):
+        return "conj"
+    if pos1.startswith("感動詞"):
+        return "int"
+    return ""
+
+
+def _pos_matches(pos_str: str, category: str) -> bool:
+    """Does a JMdict POS string (e.g. 'noun (common) (futsuumeishi)') match
+    a high-level category like 'noun' / 'verb' / 'adj-i'?"""
+    if not pos_str or not category:
+        return False
+    p = pos_str.lower()
+    if category == "noun":
+        # Exclude suffix/prefix/counter-noun senses so 人 doesn't match "noun,
+        # used as a suffix" before "noun (common)".
+        if "suffix" in p or "prefix" in p or "counter" in p:
+            return False
+        return "noun" in p
+    if category == "verb":
+        return "verb" in p or "godan" in p or "ichidan" in p
+    if category == "adj-i":
+        return "adjective (keiyoushi)" in p or p == "adjective"
+    if category == "adj-na":
+        return "adjectival noun" in p or "quasi-adjective" in p
+    if category == "adv":
+        return "adverb" in p
+    if category == "conj":
+        return "conjunction" in p
+    if category == "int":
+        return "interjection" in p
+    return False
+
+
+def pick_gloss(word: "WordOut", category: str) -> str | None:
+    """Pick the most appropriate JMdict meaning for a token used in role
+    `category`. Strategy: prefer a sense whose POS matches the requested
+    category; fall back to the first noun sense (the usual dictionary-
+    headword sense); fall back to meanings[0]."""
+    if not word.meanings:
+        return None
+    if word.meaning_pos and len(word.meaning_pos) == len(word.meanings):
+        if category:
+            for m, p in zip(word.meanings, word.meaning_pos):
+                if _pos_matches(p, category):
+                    return m
+        # No category match (or no category given) — prefer noun senses
+        # because that's usually what a learner wants when they tap a word.
+        for m, p in zip(word.meanings, word.meaning_pos):
+            if _pos_matches(p, "noun"):
+                return m
+    return word.meanings[0]
 
 
 @dataclass
@@ -67,58 +147,73 @@ class WordOut:
     jp: str
     reading: str
     meanings: list[str] = field(default_factory=list)
+    # Parallel to `meanings`: meaning_pos[i] is the primary POS tag of the
+    # JMdict sense that produced meanings[i]. Enables POS-aware sense picking
+    # so a noun-context token gets the noun sense (e.g., 人 → "person", not
+    # "-ian (e.g. Italian)" which is the suffix sense).
+    meaning_pos: list[str] = field(default_factory=list)
     pos: list[str] = field(default_factory=list)
     kanji: list[str] = field(default_factory=list)
-    # Each example: {"en": str, "jp": str, "segs": list[{"t": str, "r": str | None}]}
-    # `r` is set only on segments whose `t` contains kanji NOT in the target set,
-    # so the UI can render furigana exactly where the learner needs it.
+    # Each example: {"en": str, "jp": str, "segs": list[{"t": str, "r": str | None, "g": str | None}]}
     examples: list[dict[str, object]] = field(default_factory=list)
 
 
 def segment_with_furigana(
-    kks: object,
+    tagger: "fugashi.Tagger",
     sentence: str,
     word_by_jp: dict[str, "WordOut"] | None = None,
     kanji_meanings: dict[str, list[str]] | None = None,
 ) -> list[dict[str, str | None]]:
-    """Split a Japanese sentence into segments.
+    """Split a Japanese sentence into segments using fugashi + UniDic-lite.
 
     Each segment carries:
-      - t: surface text (the chunk from pykakasi).
-      - r: hiragana reading — populated on *every* kanji-containing segment,
-           so the runtime UI can decide per-user whether to render furigana
-           (based on which kanji the learner has mastered).
+      - t: surface text (the token from fugashi).
+      - r: hiragana reading — populated on every kanji-containing segment,
+           sourced from UniDic's surface-aligned `kana` feature, so compound
+           words (e.g., 火山列島 → かざんれっとう) read correctly.
       - g: English gloss, populated on every kanji-containing segment. Tries
-           JMdict first (first English meaning for the exact surface form);
-           falls back to a concatenation of per-kanji KANJIDIC2 meanings
-           when the surface form isn't in JMdict, so every kanji is tappable.
+           JMdict with the surface form first, then with the dictionary form
+           (`orthBase`, e.g., 出掛けて → 出掛ける), then falls back to a
+           concatenation of per-kanji KANJIDIC2 meanings. The JMdict pick
+           uses the token's part-of-speech to prefer a matching sense.
     """
     out: list[dict[str, str | None]] = []
-    for piece in kks.convert(sentence):  # type: ignore[attr-defined]
-        text = piece.get("orig", "")
-        if not text:
+    for tok in tagger(sentence):
+        surface: str = tok.surface
+        if not surface:
             continue
-        has_kanji = any(is_kanji(c) for c in text)
+        has_kanji = any(is_kanji(c) for c in surface)
 
-        # Reading: always store on kanji segments so the runtime can pick.
+        # Reading: katakana → hiragana, surface-aligned. Only for kanji segs
+        # since pure-kana segments don't need furigana.
         reading: str | None = None
         if has_kanji:
-            hira = piece.get("hira", "")
-            if hira and hira != text:
-                reading = hira
+            kana = getattr(tok.feature, "kana", "") or ""
+            if kana:
+                hira = katakana_to_hiragana(kana)
+                if hira and hira != surface:
+                    reading = hira
 
-        # Gloss: JMdict surface-form match wins. If no match, synthesize a
-        # per-char fallback from KANJIDIC2 meanings joined with " / ".
+        # Dictionary form for JMdict fallback lookup. `orthBase` is the clean
+        # surface form of the lemma (e.g., 私, 食べる). `lemma` sometimes has
+        # trailing POS disambiguators like "私-代名詞" so we prefer orthBase.
+        dict_form = getattr(tok.feature, "orthBase", "") or surface
+
+        # Part of speech → JMdict category for sense-aware gloss picking.
+        pos1 = getattr(tok.feature, "pos1", "") or ""
+        category = fugashi_to_category(pos1)
+
         gloss: str | None = None
         if has_kanji:
             if word_by_jp is not None:
-                w = word_by_jp.get(text)
-                if w is not None and w.meanings:
-                    g = w.meanings[0]
-                    gloss = g if len(g) <= 60 else g[:57] + "…"
+                w = word_by_jp.get(surface) or word_by_jp.get(dict_form)
+                if w is not None:
+                    picked = pick_gloss(w, category)
+                    if picked:
+                        gloss = picked if len(picked) <= 60 else picked[:57] + "…"
             if gloss is None and kanji_meanings is not None:
                 parts: list[str] = []
-                for c in text:
+                for c in surface:
                     if is_kanji(c):
                         ms = kanji_meanings.get(c)
                         if ms:
@@ -127,12 +222,7 @@ def segment_with_furigana(
                     g2 = " / ".join(parts)
                     gloss = g2 if len(g2) <= 60 else g2[:57] + "…"
 
-        seg: dict[str, str | None] = {
-            "t": text,
-            "r": reading,
-            "g": gloss,
-        }
-        out.append(seg)
+        out.append({"t": surface, "r": reading, "g": gloss})
     return out
 
 
@@ -260,14 +350,20 @@ def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str])
             continue
 
         meanings: list[str] = []
+        meaning_pos: list[str] = []
         pos: set[str] = set()
         for sense in entry.findall("sense"):
+            sense_pos: list[str] = []
             for p in sense.findall("pos"):
                 if p.text:
+                    sense_pos.append(p.text)
                     pos.add(p.text)
+            primary_sense_pos = sense_pos[0] if sense_pos else ""
             for g in sense.findall("gloss"):
                 if g.get("{http://www.w3.org/XML/1998/namespace}lang") in (None, "eng") and g.text:
                     meanings.append(g.text)
+                    # Keep meanings and meaning_pos in lock-step.
+                    meaning_pos.append(primary_sense_pos)
 
         if not meanings:
             continue
@@ -280,6 +376,7 @@ def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str])
             jp=jp,
             reading=reb,
             meanings=meanings[:4],
+            meaning_pos=meaning_pos[:4],
             pos=pos_list,
             kanji=sorted(set(jp_kanji)),
         )
@@ -362,15 +459,15 @@ def attach_tatoeba(
             if form in jp_text:
                 picked.setdefault(word.id, []).append((jp_text, en_sents[jp_to_en[sid]]))
 
-    # Second pass: segment with pykakasi only the sentences we're keeping.
-    print("  segmenting examples with pykakasi…")
-    kks = kakasi()
+    # Second pass: segment with fugashi/UniDic only the sentences we're keeping.
+    print("  segmenting examples with fugashi + UniDic…")
+    tagger = fugashi.Tagger()
     attached = 0
     total_examples = 0
     for word_id, pairs in picked.items():
         word = words[word_id]
         for jp_text, en_text in pairs:
-            segs = segment_with_furigana(kks, jp_text, word_by_jp, kanji_meanings)
+            segs = segment_with_furigana(tagger, jp_text, word_by_jp, kanji_meanings)
             word.examples.append({"jp": jp_text, "en": en_text, "segs": segs})
             total_examples += 1
         if word.examples:
@@ -412,11 +509,24 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     words = parse_jmdict(jmdict_path, allowed_kanji, vocab_whitelist)
 
     # Index words by their Japanese surface form so the example segmenter can
-    # look up glosses for content-words quickly.
+    # look up glosses quickly. JMdict sometimes has TWO entries sharing a
+    # headword — e.g. 人 has a separate entry for the suffix "-ian / -ite /
+    # -er" and another for the noun "person". If we naively take the first
+    # one we see, the suffix entry wins and the learner gets "-ian" as the
+    # gloss for bare 人. Prefer entries whose senses include at least one
+    # noun POS over ones that only list suffix / counter / prefix senses.
+    def _has_noun_sense(w: WordOut) -> bool:
+        return any(_pos_matches(p, "noun") for p in w.meaning_pos)
+
     word_by_jp: dict[str, WordOut] = {}
     for w in words.values():
-        # Don't overwrite an earlier (more common) word if there's a collision.
-        word_by_jp.setdefault(w.jp, w)
+        existing = word_by_jp.get(w.jp)
+        if existing is None:
+            word_by_jp[w.jp] = w
+            continue
+        # Upgrade from a noun-less entry to a noun-bearing one.
+        if _has_noun_sense(w) and not _has_noun_sense(existing):
+            word_by_jp[w.jp] = w
 
     # Per-char KANJIDIC2 meanings for fallback glosses when a segment's surface
     # form isn't in JMdict. Covers every kanji we know about, not just N5/N4.
@@ -451,7 +561,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
             picked.append({
                 "wordJp": w.jp,
                 "wordReading": w.reading,
-                "wordMeaning": w.meanings[0] if w.meanings else "",
+                "wordMeaning": pick_gloss(w, "") or "",
                 "exJp": str(ex.get("jp", "")),
                 "exEn": str(ex.get("en", "")),
             })
@@ -469,7 +579,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
                 picked.append({
                     "wordJp": w.jp,
                     "wordReading": w.reading,
-                    "wordMeaning": w.meanings[0] if w.meanings else "",
+                    "wordMeaning": pick_gloss(w, "") or "",
                     "exJp": str(ex.get("jp", "")),
                     "exEn": str(ex.get("en", "")),
                 })
@@ -484,7 +594,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     bundle = {
         # Bump whenever the schema changes — the PWA loader compares this against
         # whatever it stored in IndexedDB and refetches on mismatch.
-        "version": "5",
+        "version": "6",
         "kanji": {ch: asdict(k) for ch, k in kanji.items()},
         "words": {wid: asdict(w) for wid, w in words.items()},
     }

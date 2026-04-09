@@ -1,2 +1,3 @@
 lxml>=5.0
-pykakasi>=2.3.0
+fugashi>=1.3.0
+unidic-lite>=1.0.8

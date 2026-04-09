@@ -44,6 +44,10 @@ export interface Word {
   jp: string;
   reading: string;
   meanings: string[];
+  /** Primary JMdict POS tag for each entry in `meanings`, same length and
+   * order. Populated by the Python pipeline (fugashi + POS-aware sense
+   * picker). Optional so older v5 caches still type-check. */
+  meaning_pos?: string[];
   pos: string[];
   kanji: string[];
   examples: Example[];
