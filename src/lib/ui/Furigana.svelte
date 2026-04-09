@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import type { Segment } from '../data/types';
   import { speakJa } from '../speech/tts';
 
@@ -64,16 +65,21 @@
     // Position the tooltip horizontally centered on the word, vertically
     // above it with a 10px gap. Coordinates are in viewport space so we can
     // use position: fixed.
-    //
-    // Clamp horizontally so the tooltip never clips outside the viewport.
-    // The tooltip is max-width: min(78vw, 360px). Estimate its half-width
-    // as half of max-width and ensure the center stays that far from edges.
-    const vw = window.innerWidth;
-    const half = Math.min(vw * 0.39, 180);       // half of max tooltip width
-    const pad = 8;                                // edge breathing room
-    const center = rect.left + rect.width / 2;
-    tooltipLeft = Math.max(half + pad, Math.min(vw - half - pad, center));
+    tooltipLeft = rect.left + rect.width / 2;
     tooltipTop = rect.top;
+  }
+
+  /** After the tooltip renders, measure its actual bounding box and nudge it
+   *  horizontally if it overflows the viewport. This runs once per open (not
+   *  in a loop) so the tiny position shift is imperceptible. */
+  async function nudgeTooltipIfNeeded() {
+    await tick();                           // wait for Svelte to render the tooltip DOM
+    const tt = document.querySelector('.tooltip') as HTMLElement | null;
+    if (!tt) return;
+    const r = tt.getBoundingClientRect();
+    const pad = 8;
+    if (r.left < pad) tooltipLeft += pad - r.left;
+    else if (r.right > window.innerWidth - pad) tooltipLeft -= r.right - window.innerWidth + pad;
   }
 
   function onWordTap(i: number, seg: Segment, e: Event) {
@@ -92,6 +98,8 @@
     tooltipHue = hueFor(i);
     // Speak just the word, not the whole sentence.
     speakJa(seg.t);
+    // After the tooltip DOM renders, nudge it if it clips the viewport.
+    nudgeTooltipIfNeeded();
   }
 
   function onKey(i: number, seg: Segment, e: KeyboardEvent) {

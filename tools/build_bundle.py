@@ -402,16 +402,16 @@ def parse_kanjivg(path: Path, chars: set[str]) -> dict[str, str]:
         if not paths:
             continue
 
-        # Hoist the stroke presentation attributes onto the <svg> root instead
-        # of repeating them on every <path>. SVG presentation attributes
-        # inherit, so visual output is identical but we save ~85 bytes per
-        # stroke × ~15 strokes per kanji × 2900 kanji ≈ 3.7 MB off the bundle.
+        # Wrap the paths in a <g> with hoisted stroke presentation attributes.
+        # A <g> (not the root <svg>) because the frontend appends <circle> +
+        # <text> stroke-number markers at runtime, and those must NOT inherit
+        # fill="none" or stroke-width="3" from the SVG root. Using <g> keeps
+        # the inheritance scoped to the actual kanji strokes.
         svg_paths = "".join(f'<path d="{d}"/>' for d in paths if d)
         svg = (
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 109 109" '
-            'stroke="currentColor" fill="none" stroke-width="3" '
-            'stroke-linecap="round" stroke-linejoin="round">'
-            f"{svg_paths}</svg>"
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 109 109">'
+            '<g stroke="currentColor" fill="none" stroke-width="3" '
+            f'stroke-linecap="round" stroke-linejoin="round">{svg_paths}</g></svg>'
         )
         out[ch] = svg
 
