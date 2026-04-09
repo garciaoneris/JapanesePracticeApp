@@ -64,7 +64,15 @@
     // Position the tooltip horizontally centered on the word, vertically
     // above it with a 10px gap. Coordinates are in viewport space so we can
     // use position: fixed.
-    tooltipLeft = rect.left + rect.width / 2;
+    //
+    // Clamp horizontally so the tooltip never clips outside the viewport.
+    // The tooltip is max-width: min(78vw, 360px). Estimate its half-width
+    // as half of max-width and ensure the center stays that far from edges.
+    const vw = window.innerWidth;
+    const half = Math.min(vw * 0.39, 180);       // half of max tooltip width
+    const pad = 8;                                // edge breathing room
+    const center = rect.left + rect.width / 2;
+    tooltipLeft = Math.max(half + pad, Math.min(vw - half - pad, center));
     tooltipTop = rect.top;
   }
 

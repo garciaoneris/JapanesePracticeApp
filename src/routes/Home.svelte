@@ -25,10 +25,7 @@
     words: Object.keys(b.words).length,
   });
 
-  // Filter chips: All | N5 | N4 | N2 | N1 | — (ungraded). There's no N3 chip
-  // because KANJIDIC2 uses the pre-2010 four-level JLPT scale and our mapping
-  // folds old level 2 into modern N2 rather than splitting it.
-  type JlptFilter = 'all' | 5 | 4 | 2 | 1 | 0;
+  type JlptFilter = 'all' | 5 | 4 | 3 | 2 | 1 | 0;
   let filter = $state<JlptFilter>('all');
   const filtered = $derived(filter === 'all' ? kanjiList : kanjiList.filter((k) => k.jlpt === filter));
 
@@ -111,6 +108,7 @@
       <button class:active={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
       <button class:active={filter === 5} onclick={() => (filter = 5)}>N5</button>
       <button class:active={filter === 4} onclick={() => (filter = 4)}>N4</button>
+      <button class:active={filter === 3} onclick={() => (filter = 3)}>N3</button>
       <button class:active={filter === 2} onclick={() => (filter = 2)}>N2</button>
       <button class:active={filter === 1} onclick={() => (filter = 1)}>N1</button>
       <button class:active={filter === 0} onclick={() => (filter = 0)} title="Jouyou / jinmeiyou kanji without a JLPT tag">—</button>

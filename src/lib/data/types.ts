@@ -13,11 +13,10 @@ export interface Kanji {
   char: string;
   strokes: number;
   /** Modern JLPT level: 5=N5 (easiest) … 1=N1 (hardest). 0 means ungraded —
-   * not in any JLPT list but kept because it's in the jouyou/jinmeiyou set
-   * per KANJIDIC2's `grade` field. Note there's no 3 because KANJIDIC2 uses
-   * the pre-2010 JLPT scale (4 levels), and our mapping puts old level 2
-   * into modern N2 rather than splitting it across N3. */
-  jlpt: 0 | 1 | 2 | 4 | 5;
+   * not in any JLPT list but kept because it's in the jouyou/jinmeiyou set.
+   * N3 is synthesized by splitting old KANJIDIC2 level 2 using school grade
+   * (grades 1-4 → N3, grades 5-8 → N2). */
+  jlpt: 0 | 1 | 2 | 3 | 4 | 5;
   /** KANJIDIC2 school grade used as a finer-grained complexity tiebreaker:
    * 1–6 = elementary (kyouiku), 8 = general jouyou, 9–10 = jinmeiyou,
    * 0 = unknown. */

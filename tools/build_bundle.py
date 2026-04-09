@@ -298,9 +298,10 @@ def parse_kanjidic(path: Path) -> dict[str, KanjiOut]:
 
     Old JLPT 4 → modern N5
     Old JLPT 3 → modern N4
-    Old JLPT 2 → modern N2 (note: modern N3 didn't exist pre-2010; the old
-                            level 2 was broader than modern N2 alone, but
-                            this is the closest single-level mapping)
+    Old JLPT 2 → modern N3 if grade 1-4 (elementary school, ~310 kanji)
+                 modern N2 if grade 5-8 (late elementary + jouyou, ~429 kanji)
+                 The pre-2010 level 2 covered both modern N3 and N2; splitting
+                 by school grade gives a reasonable educational progression.
     Old JLPT 1 → modern N1
     """
     print(f"Parsing KANJIDIC2: {path}")
@@ -337,7 +338,13 @@ def parse_kanjidic(path: Path) -> dict[str, KanjiOut]:
         strokes_el = misc.find("stroke_count")
         strokes = int(strokes_el.text) if strokes_el is not None and strokes_el.text else 0
 
-        modern_jlpt = {4: 5, 3: 4, 2: 2, 1: 1}.get(jlpt_old or -1, 0)
+        # Old JLPT 2 spans both modern N3 and N2. We split using school
+        # grade: kanji taught in grades 1-4 (early elementary) map to N3,
+        # grades 5-8 (late elementary / general jouyou) map to N2.
+        if jlpt_old == 2:
+            modern_jlpt = 3 if (grade or 99) <= 4 else 2
+        else:
+            modern_jlpt = {4: 5, 3: 4, 1: 1}.get(jlpt_old or -1, 0)
 
         on: list[str] = []
         kun: list[str] = []
@@ -517,6 +524,7 @@ def attach_tatoeba(
     word_by_jp: dict[str, WordOut],
     kanji_meanings: dict[str, list[str]],
     *,
+    kanji_jlpt: dict[str, int] | None = None,
     include_word_ids: "set[str] | None" = None,
     per_word: int = 1,
     max_len: int = 40,
@@ -553,6 +561,21 @@ def attach_tatoeba(
         for sid in jp_to_en
         if len(jp_sents[sid]) <= max_len
     ]
+
+    # Sort candidates so simpler sentences come first. The Aho–Corasick sweep
+    # takes the *first* match per word, so sorting by complexity means each
+    # word naturally gets the easiest available example. "Complexity" = number
+    # of kanji in the sentence whose JLPT level is below N3 (i.e., N2/N1 or
+    # ungraded). Fewer rare kanji → more readable for an early learner.
+    if kanji_jlpt:
+        _kj = kanji_jlpt  # local alias for the lambda closure
+
+        def _complexity(pair: tuple[int, str]) -> tuple[int, int]:
+            text = pair[1]
+            rare = sum(1 for c in text if is_kanji(c) and _kj.get(c, 0) < 3)
+            return (rare, len(text))
+
+        candidates.sort(key=_complexity)
 
     # Build an Aho–Corasick automaton over every vocab surface form. This
     # turns the first pass from O(candidates × vocab) substring checks into a
@@ -720,6 +743,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
         links_path,
         word_by_jp,
         kanji_meanings,
+        kanji_jlpt={ch: k.jlpt for ch, k in kanji.items()},
         include_word_ids=include_word_ids,
     )
     t_build0 = time.perf_counter()  # attach_tatoeba prints its own sub-phases
