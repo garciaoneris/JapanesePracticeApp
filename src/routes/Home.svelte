@@ -26,7 +26,16 @@
   });
 
   type JlptFilter = 'all' | 5 | 4 | 3 | 2 | 1 | 0;
-  let filter = $state<JlptFilter>('all');
+  const FILTER_KEY = 'home-jlpt-filter';
+  function loadFilter(): JlptFilter {
+    const v = sessionStorage.getItem(FILTER_KEY);
+    if (v === 'all') return 'all';
+    const n = Number(v);
+    if ([0, 1, 2, 3, 4, 5].includes(n)) return n as JlptFilter;
+    return 'all';
+  }
+  let filter = $state<JlptFilter>(loadFilter());
+  $effect(() => { sessionStorage.setItem(FILTER_KEY, String(filter)); });
   const filtered = $derived(filter === 'all' ? kanjiList : kanjiList.filter((k) => k.jlpt === filter));
 
   // Map of kanji char → best score (0-100). Loaded once on mount — svelte-spa-router
