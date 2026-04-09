@@ -3,7 +3,6 @@
   import { link } from 'svelte-spa-router';
   import KanjiCanvas from '../lib/ui/KanjiCanvas.svelte';
   import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
-  import RevealKanji from '../lib/ui/RevealKanji.svelte';
   import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
@@ -88,13 +87,7 @@
 {:else}
   <header class="head">
     <div class="kanji-hero">
-      {#if step === 1}
-        {#key char}
-          <RevealKanji svg={kanji.svg} strokeCount={kanji.strokes} />
-        {/key}
-      {:else}
-        <span class="kanji-glyph">{kanji.char}</span>
-      {/if}
+      <span class="kanji-glyph">{kanji.char}</span>
       <div class="hero-meta">
         <div class="badges">
           <span class="badge n">N{kanji.jlpt}</span>
@@ -123,7 +116,6 @@
     {#if step === 0}
       <!-- Step 1: Learn — animation + readings + TTS -->
       <div class="learn-step">
-        <h2>Learn</h2>
         <!-- Touching the canvas area switches to Practice so the user can
              start drawing immediately without hunting for the Next button. -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -417,19 +409,6 @@
   }
   .canvas-tap-zone {
     cursor: pointer;
-    position: relative;
-  }
-  .canvas-tap-zone::after {
-    content: 'Tap to practice ✏️';
-    position: absolute;
-    bottom: 6px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 0.75rem;
-    color: var(--fg-dim);
-    opacity: 0.6;
-    pointer-events: none;
-    font-family: -apple-system, system-ui, sans-serif;
   }
 
   .nav-row {
