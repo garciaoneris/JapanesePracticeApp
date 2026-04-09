@@ -78,17 +78,20 @@ class WordOut:
 def segment_with_furigana(
     kks: object,
     sentence: str,
-    known_kanji: set[str],
     word_by_jp: dict[str, "WordOut"] | None = None,
+    kanji_meanings: dict[str, list[str]] | None = None,
 ) -> list[dict[str, str | None]]:
     """Split a Japanese sentence into segments.
 
     Each segment carries:
       - t: surface text (the chunk from pykakasi).
-      - r: hiragana reading, only when the segment contains kanji the learner
-           hasn't been introduced to yet (used for furigana).
-      - g: English gloss from JMdict, set whenever the segment's surface form
-           matches a JMdict headword — gives the UI a word-level tooltip.
+      - r: hiragana reading — populated on *every* kanji-containing segment,
+           so the runtime UI can decide per-user whether to render furigana
+           (based on which kanji the learner has mastered).
+      - g: English gloss, populated on every kanji-containing segment. Tries
+           JMdict first (first English meaning for the exact surface form);
+           falls back to a concatenation of per-kanji KANJIDIC2 meanings
+           when the surface form isn't in JMdict, so every kanji is tappable.
     """
     out: list[dict[str, str | None]] = []
     for piece in kks.convert(sentence):  # type: ignore[attr-defined]
@@ -96,25 +99,39 @@ def segment_with_furigana(
         if not text:
             continue
         has_kanji = any(is_kanji(c) for c in text)
-        unknown = has_kanji and any(is_kanji(c) and c not in known_kanji for c in text)
-        gloss: str | None = None
-        # Only attach a gloss to segments that actually contain a kanji — that's
-        # where the learner needs help. Pure-kana segments (は, を, あの, etc.)
-        # would otherwise get noisy or misleading first-sense JMdict matches.
-        if has_kanji and word_by_jp is not None:
-            w = word_by_jp.get(text)
-            if w is not None and w.meanings:
-                g = w.meanings[0]
-                gloss = g if len(g) <= 60 else g[:57] + "…"
-        seg: dict[str, str | None] = {
-            "t": text,
-            "r": None,
-            "g": gloss,
-        }
-        if unknown:
+
+        # Reading: always store on kanji segments so the runtime can pick.
+        reading: str | None = None
+        if has_kanji:
             hira = piece.get("hira", "")
             if hira and hira != text:
-                seg["r"] = hira
+                reading = hira
+
+        # Gloss: JMdict surface-form match wins. If no match, synthesize a
+        # per-char fallback from KANJIDIC2 meanings joined with " / ".
+        gloss: str | None = None
+        if has_kanji:
+            if word_by_jp is not None:
+                w = word_by_jp.get(text)
+                if w is not None and w.meanings:
+                    g = w.meanings[0]
+                    gloss = g if len(g) <= 60 else g[:57] + "…"
+            if gloss is None and kanji_meanings is not None:
+                parts: list[str] = []
+                for c in text:
+                    if is_kanji(c):
+                        ms = kanji_meanings.get(c)
+                        if ms:
+                            parts.append(ms[0])
+                if parts:
+                    g2 = " / ".join(parts)
+                    gloss = g2 if len(g2) <= 60 else g2[:57] + "…"
+
+        seg: dict[str, str | None] = {
+            "t": text,
+            "r": reading,
+            "g": gloss,
+        }
         out.append(seg)
     return out
 
@@ -295,8 +312,8 @@ def attach_tatoeba(
     jp_sent_path: Path,
     en_sent_path: Path,
     links_path: Path,
-    known_kanji: set[str],
     word_by_jp: dict[str, WordOut],
+    kanji_meanings: dict[str, list[str]],
     per_word: int = 2,
     max_len: int = 40,
 ) -> None:
@@ -353,7 +370,7 @@ def attach_tatoeba(
     for word_id, pairs in picked.items():
         word = words[word_id]
         for jp_text, en_text in pairs:
-            segs = segment_with_furigana(kks, jp_text, known_kanji, word_by_jp)
+            segs = segment_with_furigana(kks, jp_text, word_by_jp, kanji_meanings)
             word.examples.append({"jp": jp_text, "en": en_text, "segs": segs})
             total_examples += 1
         if word.examples:
@@ -401,7 +418,11 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
         # Don't overwrite an earlier (more common) word if there's a collision.
         word_by_jp.setdefault(w.jp, w)
 
-    attach_tatoeba(words, jpn_sent_path, eng_sent_path, links_path, allowed_kanji, word_by_jp)
+    # Per-char KANJIDIC2 meanings for fallback glosses when a segment's surface
+    # form isn't in JMdict. Covers every kanji we know about, not just N5/N4.
+    kanji_meanings: dict[str, list[str]] = {ch: k.meanings for ch, k in kanji.items()}
+
+    attach_tatoeba(words, jpn_sent_path, eng_sent_path, links_path, word_by_jp, kanji_meanings)
 
     # Back-link words to kanji.
     for w in words.values():
@@ -463,7 +484,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     bundle = {
         # Bump whenever the schema changes — the PWA loader compares this against
         # whatever it stored in IndexedDB and refetches on mismatch.
-        "version": "4",
+        "version": "5",
         "kanji": {ch: asdict(k) for ch, k in kanji.items()},
         "words": {wid: asdict(w) for wid, w in words.items()},
     }

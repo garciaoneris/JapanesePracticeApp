@@ -112,10 +112,27 @@
         <ul class="examples">
           {#each exampleList as ex (ex.jp)}
             <li class="example-card">
-              <button class="sentence" onclick={() => speakJa(ex.jp)} aria-label="Speak sentence">
-                <Furigana segments={ex.segs} />
-                <span class="speak-tag">🔊</span>
-              </button>
+              <div class="ex-row">
+                <div
+                  class="sentence"
+                  onclick={() => speakJa(ex.jp)}
+                  onkeydown={(e) => e.key === 'Enter' && speakJa(ex.jp)}
+                  role="button"
+                  tabindex="0"
+                  aria-label="Tap empty space to hear the whole sentence"
+                >
+                  <Furigana
+                    segments={ex.segs}
+                    knownKanji={knownKanji}
+                    currentKanji={word.kanji[0]}
+                  />
+                </div>
+                <button
+                  class="speak-btn"
+                  onclick={(e) => { e.stopPropagation(); speakJa(ex.jp); }}
+                  aria-label="Speak whole sentence"
+                >🔊</button>
+              </div>
               <div class="ex-en">{ex.en}</div>
             </li>
           {/each}
@@ -183,25 +200,30 @@
   .example-card:hover {
     border-color: rgba(255, 122, 89, 0.4);
   }
-  .sentence {
+  .ex-row {
     display: flex;
     align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.75rem;
-    width: 100%;
-    background: transparent;
-    border: none;
+    gap: 0.5rem;
+  }
+  .sentence {
+    flex: 1;
+    min-width: 0;
     color: var(--fg);
-    text-align: left;
-    padding: 0;
     font-size: 1.15rem;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
-  .speak-tag {
+  .sentence:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+  .speak-btn {
     flex-shrink: 0;
-    font-size: 0.9rem;
-    opacity: 0.7;
-    margin-top: 0.4rem;
+    padding: 0.35rem 0.6rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 0.95rem;
+    opacity: 0.75;
   }
+  .speak-btn:hover { opacity: 1; border-color: var(--accent); }
   .ex-en {
     color: var(--fg-dim);
     font-size: 0.9rem;
