@@ -118,6 +118,7 @@
       <div class="learn-step">
         <h2>Watch the stroke order</h2>
         <p class="hint">Each stroke is drawn in order. Tap the canvas when you're ready to practice.</p>
+        <div class="stroke-info"><b>{kanji.strokes}</b> strokes</div>
         <!-- Touching the canvas area switches to Practice -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="canvas-tap-zone" onpointerdown={() => (step = 1 as Step)}>
@@ -406,6 +407,14 @@
     width: 100%;
     margin-top: 1rem;
     padding: 1rem;
+    font-size: 1.05rem;
+  }
+  /* Matches PracticeMorph's .hint-row height so the canvas sits at the
+     same vertical position on both Learn and Practice steps. */
+  .stroke-info {
+    text-align: center;
+    margin-bottom: 0.75rem;
+    color: var(--fg);
     font-size: 1.05rem;
   }
   .canvas-tap-zone {
