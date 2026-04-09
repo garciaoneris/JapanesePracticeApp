@@ -58,16 +58,23 @@
     return `color: ${c}; border-color: ${c};`;
   }
 
-  /** Primary reading for the cell label: first kun'yomi if present, else
-   * first on'yomi. Strips okurigana markers (".") and prefix/suffix dashes
-   * so "の.む" reads as "のむ" and "-び" reads as "び". */
+  /** Primary reading for the cell label: prefer on'yomi (the standard
+   * dictionary reading learners associate with each kanji), fall back to
+   * kun'yomi. On'yomi are stored in katakana by KANJIDIC2 so we convert
+   * to hiragana for a uniform display. Strips okurigana markers (".") and
+   * prefix/suffix dashes so "の.む" → "のむ", "-び" → "び". */
   function primaryReading(kun: string[], on: string[]): string {
     const clean = (s: string) => s.replace(/[.\-]/g, '').trim();
-    for (const r of kun) {
-      const c = clean(r);
-      if (c) return c;
-    }
+    const toHira = (s: string) =>
+      [...s].map((c) => {
+        const cp = c.codePointAt(0)!;
+        return cp >= 0x30a1 && cp <= 0x30f6 ? String.fromCodePoint(cp - 0x60) : c;
+      }).join('');
     for (const r of on) {
+      const c = clean(r);
+      if (c) return toHira(c);
+    }
+    for (const r of kun) {
       const c = clean(r);
       if (c) return c;
     }
