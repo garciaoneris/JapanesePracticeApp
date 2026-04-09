@@ -45,6 +45,22 @@
     const c = scoreColor(s);
     return `color: ${c}; border-color: ${c};`;
   }
+
+  /** Primary reading for the cell label: first kun'yomi if present, else
+   * first on'yomi. Strips okurigana markers (".") and prefix/suffix dashes
+   * so "の.む" reads as "のむ" and "-び" reads as "び". */
+  function primaryReading(kun: string[], on: string[]): string {
+    const clean = (s: string) => s.replace(/[.\-]/g, '').trim();
+    for (const r of kun) {
+      const c = clean(r);
+      if (c) return c;
+    }
+    for (const r of on) {
+      const c = clean(r);
+      if (c) return c;
+    }
+    return '';
+  }
 </script>
 
 <header class="hero">
@@ -94,10 +110,9 @@
         style={cellStyle(k.char)}
       >
         <span class="ch">{k.char}</span>
+        <span class="lvl">{primaryReading(k.kun, k.on)}</span>
         {#if bestScores.has(k.char)}
           <span class="score-badge" style={badgeStyle(k.char)}>{bestScores.get(k.char)}</span>
-        {:else}
-          <span class="lvl">N{k.jlpt}</span>
         {/if}
       </a>
     {/each}
@@ -240,12 +255,18 @@
   .cell.mastered {
     box-shadow: 0 0 0 2px rgba(255, 210, 74, 0.4), 0 8px 22px rgba(255, 210, 74, 0.2);
   }
-  .ch { font-size: 2rem; line-height: 1; }
+  .ch { font-size: 1.9rem; line-height: 1; }
   .lvl {
-    font-size: 0.6rem;
+    font-size: 0.72rem;
     color: var(--fg-dim);
-    margin-top: 0.3rem;
-    letter-spacing: 0.05em;
+    margin-top: 0.35rem;
+    font-family: 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
+    letter-spacing: 0.02em;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 0.25rem;
   }
   .score-badge {
     position: absolute;
