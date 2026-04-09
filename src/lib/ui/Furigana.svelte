@@ -22,6 +22,9 @@
   let tooltipHue = $state<number>(0);
   let tooltipLeft = $state<number>(0);
   let tooltipTop = $state<number>(0);
+  /** When the tooltip box is nudged to stay on-screen, the arrow needs to
+   *  shift the opposite direction so it still points at the tapped word. */
+  let arrowNudge = $state<number>(0);
 
   // Deterministic golden-angle hue spacing: 73° gives adjacent segments
   // visibly distinct colors without clashing.
@@ -73,13 +76,21 @@
    *  horizontally if it overflows the viewport. This runs once per open (not
    *  in a loop) so the tiny position shift is imperceptible. */
   async function nudgeTooltipIfNeeded() {
+    arrowNudge = 0;
     await tick();                           // wait for Svelte to render the tooltip DOM
     const tt = document.querySelector('.tooltip') as HTMLElement | null;
     if (!tt) return;
     const r = tt.getBoundingClientRect();
     const pad = 8;
-    if (r.left < pad) tooltipLeft += pad - r.left;
-    else if (r.right > window.innerWidth - pad) tooltipLeft -= r.right - window.innerWidth + pad;
+    if (r.left < pad) {
+      const dx = pad - r.left;
+      tooltipLeft += dx;
+      arrowNudge = -dx;                    // shift arrow back toward the word
+    } else if (r.right > window.innerWidth - pad) {
+      const dx = r.right - window.innerWidth + pad;
+      tooltipLeft -= dx;
+      arrowNudge = dx;                     // shift arrow back toward the word
+    }
   }
 
   function onWordTap(i: number, seg: Segment, e: Event) {
@@ -179,7 +190,7 @@
 {#if openIndex !== null && tooltipText}
   <div
     class="tooltip"
-    style="left: {tooltipLeft}px; top: {tooltipTop}px; --hue: {tooltipHue}deg"
+    style="left: {tooltipLeft}px; top: {tooltipTop}px; --hue: {tooltipHue}deg; --arrow-nudge: {arrowNudge}px"
     role="tooltip"
   >
     {tooltipText}
@@ -246,10 +257,12 @@
     line-height: 1.3;
   }
   .tooltip::after {
-    /* Arrow pointing down to the anchor. */
+    /* Arrow pointing down to the anchor word. When the tooltip box is nudged
+       to stay on-screen, --arrow-nudge shifts the arrow back so it still
+       points at the original tap target. */
     content: '';
     position: absolute;
-    left: 50%;
+    left: calc(50% + var(--arrow-nudge, 0px));
     bottom: -6px;
     width: 0;
     height: 0;
