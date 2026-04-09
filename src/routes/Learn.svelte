@@ -116,8 +116,9 @@
     {#if step === 0}
       <!-- Step 1: Learn — animation + readings + TTS -->
       <div class="learn-step">
-        <!-- Touching the canvas area switches to Practice so the user can
-             start drawing immediately without hunting for the Next button. -->
+        <h2>Watch the stroke order</h2>
+        <p class="hint">Each stroke is drawn in order. Tap the canvas when you're ready to practice.</p>
+        <!-- Touching the canvas area switches to Practice -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="canvas-tap-zone" onpointerdown={() => (step = 1 as Step)}>
           {#key char + 'animate'}
