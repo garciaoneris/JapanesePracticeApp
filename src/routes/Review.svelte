@@ -2,9 +2,10 @@
   import { link, push } from 'svelte-spa-router';
   import { onMount } from 'svelte';
   import { bundle } from '../lib/data/bundle';
-  import { dueSrs, putSrs, getSrs } from '../lib/data/db';
+  import { dueSrs, putSrs, getSrs, getAllBestScores } from '../lib/data/db';
   import { grade, newCard } from '../lib/srs/sm2';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
+  import { KNOWN_THRESHOLD } from '../lib/data/known';
   import type { Grade, SrsState } from '../lib/data/types';
 
   const NEW_PER_SESSION = 10;
@@ -18,18 +19,22 @@
     const now = Date.now();
     const due = await dueSrs(now, 200);
 
-    // Top up with new cards the user hasn't seen yet.
+    // Top up with new cards for kanji/words the user has already mastered
+    // (score >= 80) but hasn't been quizzed on via SRS yet.
     if (due.length < NEW_PER_SESSION) {
       const b = bundle();
+      const scores = await getAllBestScores();
       const need = NEW_PER_SESSION - due.length;
       const newCandidates: SrsState[] = [];
       for (const k of Object.values(b.kanji)) {
         if (newCandidates.length >= need) break;
+        if ((scores.get(k.char) ?? 0) < KNOWN_THRESHOLD) continue;
         const id = `kanji:${k.char}`;
         if (!(await getSrs(id))) newCandidates.push(newCard(id, 'kanji', now));
       }
       for (const w of Object.values(b.words)) {
         if (newCandidates.length >= need) break;
+        if (w.kanji.length > 0 && !w.kanji.every((c) => (scores.get(c) ?? 0) >= KNOWN_THRESHOLD)) continue;
         const id = `word:${w.id}`;
         if (!(await getSrs(id))) newCandidates.push(newCard(id, 'word', now));
       }

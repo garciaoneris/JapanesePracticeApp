@@ -113,6 +113,8 @@
 
   function onDown(e: PointerEvent) {
     if (morphing) return;
+    // Auto-clear: starting a new stroke after morph resets for a fresh attempt.
+    if (morphed) reset(true);
     drawing = true;
     // Wrap setPointerCapture: it can throw on non-trusted events (e.g. synthetic
     // pointer events from automation harnesses). If it fails we still capture
@@ -135,6 +137,18 @@
     }
     currentPoints = [];
     redraw();
+
+    // Auto-morph once the user has drawn enough strokes.
+    if (
+      userStrokes.length >= refPaths.length &&
+      userStrokes.length > 0 &&
+      !morphed &&
+      !morphing
+    ) {
+      setTimeout(() => {
+        if (!morphing && !morphed) runMorph(!seenFullMorph);
+      }, 350);
+    }
   }
 
   // ── scoring ────────────────────────────────────────────────────────
@@ -474,6 +488,10 @@
     border: 1px solid var(--border);
     box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
     overflow: hidden;
+    /* Prevent text-selection handles on iPad when drawing strokes */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
   .wrap::before {
     content: '';

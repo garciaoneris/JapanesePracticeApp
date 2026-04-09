@@ -52,7 +52,7 @@
   // each kanji carries up to 4 {word, reading, sentence} triples.
   const callouts = $derived(kanji?.callouts ?? []);
 
-  type Step = 0 | 1 | 2 | 3;
+  type Step = 0 | 1 | 2;
   let step = $state<Step>(0);
 
   // Reset progression whenever the kanji changes.
@@ -62,14 +62,13 @@
   });
 
   const STEPS = [
-    { key: 'listen', label: 'Listen' },
-    { key: 'watch', label: 'Watch' },
+    { key: 'learn', label: 'Learn' },
     { key: 'practice', label: 'Practice' },
     { key: 'examples', label: 'Examples' },
   ] as const;
 
   function next() {
-    if (step < 3) step = (step + 1) as Step;
+    if (step < 2) step = (step + 1) as Step;
   }
   function prev() {
     if (step > 0) step = (step - 1) as Step;
@@ -89,7 +88,7 @@
 {:else}
   <header class="head">
     <div class="kanji-hero">
-      {#if step === 2}
+      {#if step === 1}
         {#key char}
           <RevealKanji svg={kanji.svg} strokeCount={kanji.strokes} />
         {/key}
@@ -122,9 +121,12 @@
 
   <section class="panel">
     {#if step === 0}
-      <!-- Step 1: Listen & meaning -->
-      <div class="listen">
-        <h2>Listen and read</h2>
+      <!-- Step 1: Learn — animation + readings + TTS -->
+      <div class="learn-step">
+        <h2>Learn</h2>
+        {#key char + 'animate'}
+          <KanjiCanvas svg={kanji.svg} mode="animate" />
+        {/key}
         <div class="readings-grid">
           <div class="reading-block">
             <div class="reading-label">On'yomi</div>
@@ -149,25 +151,12 @@
             </div>
           </div>
         </div>
-        <div class="meaning-block">
-          <div class="reading-label">Meaning</div>
-          <p class="meaning-text">{kanji.meanings.join(', ')}</p>
-        </div>
         <button class="primary big" onclick={speakReadings} disabled={!ttsSupported()}>
           🔊 Hear it
         </button>
       </div>
     {:else if step === 1}
-      <!-- Step 2: Watch stroke order with direction animation -->
-      <div class="watch">
-        <h2>Watch the stroke order</h2>
-        <p class="hint">Each stroke is drawn in order, from start to end.</p>
-        {#key char + 'animate'}
-          <KanjiCanvas svg={kanji.svg} mode="animate" />
-        {/key}
-      </div>
-    {:else if step === 2}
-      <!-- Step 3: Free-form practice with morph -->
+      <!-- Step 2: Practice — free-form drawing with morph -->
       <div class="practice">
         <h2>Draw it from memory</h2>
         <p class="hint">Draw any way you like — when you're done, your strokes will morph into the real shape.</p>
@@ -176,7 +165,7 @@
         {/key}
       </div>
     {:else}
-      <!-- Step 4: Examples with furigana + TTS -->
+      <!-- Step 3: Examples with furigana + TTS -->
       <div class="examples">
         <h2>See it in context</h2>
         {#if tooAdvanced && examples.length > 0}
@@ -217,15 +206,19 @@
   </section>
 
   <div class="nav-row">
-    <button onclick={prev} disabled={step === 0}>← Back</button>
-    {#if step < 3}
+    {#if step < 2}
+      <button onclick={prev} disabled={step === 0}>← Back</button>
       <button class="primary" onclick={next}>Next →</button>
-    {:else if words.length}
-      <a class="btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
+    {:else}
+      <button onclick={prev}>← Back</button>
+      <a class="btn home-btn" href="/" use:link>🏠 Home</a>
+      {#if words.length}
+        <a class="btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
+      {/if}
     {/if}
   </div>
 
-  {#if step === 3 && words.length > 1}
+  {#if step === 2 && words.length > 1}
     <section class="words-section">
       <h3>Words using {kanji.char}</h3>
       <div class="word-grid">
@@ -308,7 +301,7 @@
 
   .stepper {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 0.4rem;
     padding: 0.5rem 1rem 0;
   }
@@ -370,21 +363,17 @@
     font-size: 0.9rem;
   }
 
-  .listen .readings-grid {
+  .learn-step .readings-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.75rem;
     margin-top: 1rem;
   }
-  .reading-block,
-  .meaning-block {
+  .reading-block {
     background: var(--bg-alt);
     border: 1px solid var(--border);
     border-radius: 14px;
     padding: 0.85rem 1rem;
-  }
-  .meaning-block {
-    margin-top: 0.75rem;
   }
   .reading-label {
     font-size: 0.7rem;
@@ -414,12 +403,7 @@
     font-size: 0.7rem;
     opacity: 0.7;
   }
-  .meaning-text {
-    margin: 0;
-    color: var(--fg);
-    font-size: 1.05rem;
-  }
-  .listen .primary.big {
+  .learn-step .primary.big {
     display: block;
     width: 100%;
     margin-top: 1rem;
@@ -454,6 +438,9 @@
     border-color: var(--accent);
     color: #1b1b1f;
     font-weight: 600;
+  }
+  .home-btn {
+    flex: 0.8;
   }
 
   .advanced-hint {
@@ -564,7 +551,7 @@
   .muted { color: var(--fg-dim); }
 
   @media (max-width: 380px) {
-    .listen .readings-grid {
+    .learn-step .readings-grid {
       grid-template-columns: 1fr;
     }
     .step .lbl {
