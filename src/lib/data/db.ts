@@ -70,6 +70,7 @@ export async function getSrs(id: string): Promise<SrsState | undefined> {
 export async function putSrs(state: SrsState): Promise<void> {
   const d = await db();
   await d.put('srs', state);
+  _notifySync();
 }
 
 export async function dueSrs(now: number, limit = 50): Promise<SrsState[]> {
@@ -108,6 +109,7 @@ export async function putBestScoreIfBetter(char: string, score: number): Promise
   const next = Math.max(current, score);
   if (next !== current) await tx.store.put(next, char);
   await tx.done;
+  if (next !== current) _notifySync();
   return next;
 }
 
@@ -116,6 +118,31 @@ export async function putBestScoreIfBetter(char: string, score: number): Promise
 export async function appendAttempt(a: Omit<import('./types').Attempt, 'id'>): Promise<void> {
   const d = await db();
   await d.add('attempts', a as import('./types').Attempt);
+  _notifySync();
+}
+
+// ── sync notification ─────────────────────────────────────────────────
+
+/** Lazily imported to avoid a circular dep between db.ts and sync.ts. */
+function _notifySync() {
+  import('./sync').then((m) => m.schedulePush()).catch(() => {});
+}
+
+// ── generic meta helpers (used by sync) ───────────────────────────────
+
+export async function getMeta<T = unknown>(key: string): Promise<T | undefined> {
+  const d = await db();
+  return d.get('meta', key) as Promise<T | undefined>;
+}
+
+export async function putMeta(key: string, value: unknown): Promise<void> {
+  const d = await db();
+  await d.put('meta', value, key);
+}
+
+export async function deleteMeta(key: string): Promise<void> {
+  const d = await db();
+  await d.delete('meta', key);
 }
 
 /** Return the most recent `limit` attempts for `char`, oldest-first so callers

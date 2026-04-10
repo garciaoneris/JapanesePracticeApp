@@ -92,6 +92,7 @@
 </script>
 
 <header class="hero">
+  <a class="settings-gear" href="/settings" use:link aria-label="Settings">⚙</a>
   <div class="hero-inner">
     <p class="kicker">日本語</p>
     <h1>Japanese Practice</h1>
@@ -154,6 +155,21 @@
 <style>
   .hero {
     padding: 2.5rem 1.25rem 1.5rem;
+    position: relative;
+  }
+  .settings-gear {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    font-size: 1.4rem;
+    color: var(--fg-dim);
+    opacity: 0.6;
+    text-decoration: none;
+    transition: opacity 0.15s;
+    z-index: 1;
+  }
+  .settings-gear:hover {
+    opacity: 1;
   }
   .hero-inner {
     text-align: center;
