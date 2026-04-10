@@ -58,13 +58,12 @@
     bestScores = scores;
     if (qs) quizScores = new Map(Object.entries(qs));
 
-    // Deep-link: /vocabulary#kanji:下 opens words view for that kanji.
-    const hash = window.location.hash;
-    const m = hash.match(/^#kanji:(.+)/);
-    if (m) {
-      const ch = decodeURIComponent(m[1]);
-      if (b.kanji[ch]) {
-        selectedKanji = ch;
+    // If navigating back from a word detail page, re-open the kanji's words view.
+    const openKanji = sessionStorage.getItem('vocab-open-kanji');
+    if (openKanji) {
+      sessionStorage.removeItem('vocab-open-kanji');
+      if (b.kanji[openKanji]) {
+        selectedKanji = openKanji;
         mode = 'words';
       }
     }

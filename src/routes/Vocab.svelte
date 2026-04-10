@@ -57,7 +57,7 @@
   <a class="back" href="/" use:link>← Home</a>
   <a class="back" href="/vocabulary" use:link>← Back to vocabulary</a>
   {#if word?.kanji?.length}
-    <a class="back" href={`/vocabulary#kanji:${encodeURIComponent(word.kanji[0])}`} use:link>← Back to {word.kanji[0]}</a>
+    <button class="back" onclick={() => { sessionStorage.setItem('vocab-open-kanji', word.kanji[0]); window.location.hash = '#/vocabulary'; }}>← Back to {word.kanji[0]}</button>
   {/if}
 </div>
 
