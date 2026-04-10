@@ -117,10 +117,17 @@
   let quizCorrectCount = $state(0);
   let quizFinished = $state(false);
 
-  function buildDistractors(correct: string, pool: string[], count: number): string[] {
-    const unique = [...new Set(pool.filter((x) => x !== correct))];
-    const picked = shuffle(unique).slice(0, count);
-    return picked;
+  /** Could this meaning be confused with a romanized Japanese reading?
+   *  Single lowercase words like "mawashi", "tofu" look like romaji. */
+  function looksLikeRomaji(s: string): boolean {
+    return /^[a-z]+$/i.test(s) && s.length < 10;
+  }
+
+  function buildDistractors(correct: string, pool: string[], count: number, filterRomaji = false): string[] {
+    let candidates = pool.filter((x) => x !== correct && x.length > 0);
+    if (filterRomaji) candidates = candidates.filter((x) => !looksLikeRomaji(x));
+    const unique = [...new Set(candidates)];
+    return shuffle(unique).slice(0, count);
   }
 
   function startQuiz(): void {
@@ -148,11 +155,11 @@
         correctIdx: rChoices.indexOf(w.reading),
       });
 
-      // Meaning question
+      // Meaning question — filter romaji-looking distractors
       const correctMeaning = w.meanings[0] ?? '';
-      let mDistractors = buildDistractors(correctMeaning, meaningPool, 3);
+      let mDistractors = buildDistractors(correctMeaning, meaningPool, 3, true);
       if (mDistractors.length < 3) {
-        const extra = buildDistractors(correctMeaning, allMeaningPool, 3 - mDistractors.length);
+        const extra = buildDistractors(correctMeaning, allMeaningPool, 3 - mDistractors.length, true);
         mDistractors = [...mDistractors, ...extra].slice(0, 3);
       }
       const mChoices = shuffle([correctMeaning, ...mDistractors]);
@@ -220,11 +227,22 @@
     mode = 'words';
   }
 
-  // Quiz summary color
-  function summaryColor(correct: number, total: number): string {
+  // Quiz summary color — separate scale from kanji-writing scores:
+  // gold (#ffd24a) for perfect, amber→green gradient for 50%–near-perfect,
+  // red for below 50%.
+  function quizScoreColor(correct: number, total: number): string {
     if (total === 0) return 'var(--fg-dim)';
-    const pct = (correct / total) * 100;
-    return scoreColor(pct) ?? 'var(--fg-dim)';
+    if (correct === total) return '#ffd24a'; // gold = perfect
+    const pct = correct / total;
+    if (pct >= 0.5) {
+      // Lerp from green (1.0 = near-perfect) to amber (0.5)
+      const t = (pct - 0.5) / 0.5; // 0 at 50%, 1 at 100%
+      const r = Math.round(255 * (1 - t) + 94 * t);
+      const g = Math.round(180 * (1 - t) + 202 * t);
+      const b = Math.round(50 * (1 - t) + 124 * t);
+      return `rgb(${r},${g},${b})`;
+    }
+    return 'var(--err)'; // below 50%
   }
 </script>
 
@@ -273,7 +291,7 @@
 
 {:else if mode === 'words'}
   <!-- ── WORDS MODE ─────────────────────────────────────────────────── -->
-  <button class="back-btn" onclick={backToGrid}>← Back to kanji</button>
+  <button class="back-btn" onclick={backToGrid}>← Back to vocabulary</button>
 
   {#if selectedKanjiData}
     <header class="words-header">
@@ -327,7 +345,7 @@
       <h1>Quiz Complete</h1>
       <div
         class="summary-score"
-        style="color: {summaryColor(quizCorrectCount, quizQuestions.length)}"
+        style="color: {quizScoreColor(quizCorrectCount, quizQuestions.length)}"
       >
         {quizCorrectCount} / {quizQuestions.length}
       </div>

@@ -53,7 +53,10 @@
   }
 </script>
 
-<a class="back" href="/" use:link>← Back</a>
+<div class="nav-links">
+  <a class="back" href="/" use:link>← Home</a>
+  <a class="back" href="/vocabulary" use:link>← Back to vocabulary</a>
+</div>
 
 {#if !word}
   <div class="center">Unknown word.</div>

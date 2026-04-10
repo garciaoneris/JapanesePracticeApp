@@ -246,9 +246,6 @@
             </div>
           </div>
         </div>
-        <button class="primary big" onclick={speakReadings} disabled={!ttsSupported()}>
-          🔊 Hear it
-        </button>
       </div>
     {:else if step === 1}
       <!-- Step 2: Practice — free-form drawing with morph -->
@@ -301,15 +298,12 @@
   </section>
 
   <div class="nav-row">
+    <button onclick={prev} disabled={step === 0}>← Back</button>
+    <a class="btn home-btn" href="/" use:link>🏠 Home</a>
     {#if step < 2}
-      <button onclick={prev} disabled={step === 0}>← Back</button>
       <button class="primary" onclick={next}>Next →</button>
-    {:else}
-      <button onclick={prev}>← Back</button>
-      <a class="btn home-btn" href="/" use:link>🏠 Home</a>
-      {#if words.length}
-        <a class="btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
-      {/if}
+    {:else if words.length}
+      <a class="btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
     {/if}
   </div>
 
