@@ -143,9 +143,12 @@
     _capturedPts.push(_learnPt(e));
     if (!learnDrawing) {
       learnDrawing = true;
-      // Hide the SVG strokes immediately via direct DOM manipulation —
-      // don't wait for Svelte's reactive class update to re-render.
-      _capZone?.querySelector('svg g')?.setAttribute('opacity', '0');
+      // Hide the entire SVG immediately via direct DOM manipulation so
+      // the kanji strokes and numbers vanish before the user's first
+      // stroke pixel appears. The canvas background + grid (CSS pseudo-
+      // elements on .wrap) stay visible.
+      const svg = _capZone?.querySelector('svg') as SVGElement | null;
+      if (svg) svg.style.opacity = '0';
     }
     _renderLearnStroke();
   }
@@ -514,11 +517,10 @@
     cursor: pointer;
     position: relative;
   }
-  /* When the user starts drawing, hide the kanji stroke paths but keep the
-     canvas background + grid visible so they have a drawing surface. */
-  .canvas-tap-zone.drawing :global(svg g) {
+  /* When the user starts drawing, hide the entire SVG (strokes + numbers)
+     but keep the canvas background + grid (CSS pseudo-elements) visible. */
+  .canvas-tap-zone.drawing :global(svg) {
     opacity: 0;
-    transition: opacity 0.12s;
   }
   /* Transparent overlay canvas that renders the user's stroke in real-time. */
   .draw-overlay {
