@@ -141,7 +141,12 @@
   function learnMove(e: PointerEvent) {
     if (!_capturing) return;
     _capturedPts.push(_learnPt(e));
-    if (!learnDrawing) learnDrawing = true;
+    if (!learnDrawing) {
+      learnDrawing = true;
+      // Hide the SVG strokes immediately via direct DOM manipulation —
+      // don't wait for Svelte's reactive class update to re-render.
+      _capZone?.querySelector('svg g')?.setAttribute('opacity', '0');
+    }
     _renderLearnStroke();
   }
 
