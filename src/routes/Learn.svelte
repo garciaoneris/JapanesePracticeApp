@@ -91,6 +91,7 @@
   let _capturing = false;
   let _capturedPts: Point[] = [];
   let _capZone: HTMLDivElement | undefined;
+  let _drawCanvas: HTMLCanvasElement | undefined;
 
   function _learnPt(e: PointerEvent): Point {
     if (!_capZone) return { x: 0, y: 0 };
@@ -107,14 +108,41 @@
     _capturing = true;
     _capturedPts = [_learnPt(e)];
     try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
+    // Size the draw overlay to match the canvas area.
+    if (_drawCanvas && _capZone) {
+      const wrap = _capZone.querySelector('.wrap') as HTMLElement | null;
+      if (wrap) {
+        const sz = wrap.clientWidth;
+        _drawCanvas.width = sz;
+        _drawCanvas.height = sz;
+      }
+    }
+  }
+
+  function _renderLearnStroke() {
+    if (!_drawCanvas || _capturedPts.length < 2) return;
+    const ctx = _drawCanvas.getContext('2d');
+    if (!ctx) return;
+    const sx = _drawCanvas.width / VB;
+    const sy = _drawCanvas.height / VB;
+    ctx.clearRect(0, 0, _drawCanvas.width, _drawCanvas.height);
+    ctx.strokeStyle = '#ff7a59';
+    ctx.lineWidth = Math.max(4, _drawCanvas.width / 26);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(_capturedPts[0].x * sx, _capturedPts[0].y * sy);
+    for (let i = 1; i < _capturedPts.length; i++) {
+      ctx.lineTo(_capturedPts[i].x * sx, _capturedPts[i].y * sy);
+    }
+    ctx.stroke();
   }
 
   function learnMove(e: PointerEvent) {
     if (!_capturing) return;
     _capturedPts.push(_learnPt(e));
-    // First move = user is drawing, not just tapping. Hide the animation
-    // so they can see their stroke on a clean canvas.
     if (!learnDrawing) learnDrawing = true;
+    _renderLearnStroke();
   }
 
   function learnUp() {
@@ -174,17 +202,17 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="canvas-tap-zone"
+          class:drawing={learnDrawing}
           bind:this={_capZone}
           onpointerdown={learnDown}
           onpointermove={learnMove}
           onpointerup={learnUp}
           onpointercancel={learnUp}
         >
-          <div class="anim-layer" class:hidden={learnDrawing}>
-            {#key char + 'animate'}
-              <KanjiCanvas svg={kanji.svg} mode="animate" />
-            {/key}
-          </div>
+          {#key char + 'animate'}
+            <KanjiCanvas svg={kanji.svg} mode="animate" />
+          {/key}
+          <canvas class="draw-overlay" bind:this={_drawCanvas}></canvas>
         </div>
         <div class="readings-grid">
           <div class="reading-block">
@@ -479,10 +507,22 @@
   }
   .canvas-tap-zone {
     cursor: pointer;
+    position: relative;
   }
-  .anim-layer.hidden {
+  /* When the user starts drawing, hide the kanji stroke paths but keep the
+     canvas background + grid visible so they have a drawing surface. */
+  .canvas-tap-zone.drawing :global(svg g) {
     opacity: 0;
-    transition: opacity 0.15s;
+    transition: opacity 0.12s;
+  }
+  /* Transparent overlay canvas that renders the user's stroke in real-time. */
+  .draw-overlay {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: none;
+    z-index: 2;
   }
 
   .nav-row {
