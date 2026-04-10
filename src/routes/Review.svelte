@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { link, push } from 'svelte-spa-router';
+  import { link } from 'svelte-spa-router';
   import { onMount } from 'svelte';
   import { bundle } from '../lib/data/bundle';
   import { dueSrs, putSrs, getSrs, getAllBestScores } from '../lib/data/db';
@@ -102,15 +102,68 @@
     }
   });
 
-  async function answer(g: Grade) {
+  // ── Multiple-choice quiz ──────────────────────────────────────────────
+  let choices = $state<string[]>([]);
+  let correctChoice = $state('');
+  let picked = $state<number | null>(null);
+
+  function shuffle<T>(arr: T[]): T[] {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  /** Build 4 meaning choices for the current card. */
+  function buildChoices() {
+    if (!display) return;
+    const b = bundle();
+    let correct: string;
+    if (display.kind === 'kanji' && display.kanji) {
+      correct = display.kanji.meanings.slice(0, 2).join(', ');
+    } else if (display.kind === 'word' && display.word) {
+      correct = display.word.meanings[0] ?? '';
+    } else {
+      return;
+    }
+    correctChoice = correct;
+
+    // Gather distractors from other kanji/words in the same JLPT level.
+    const pool: string[] = [];
+    for (const k of Object.values(b.kanji)) {
+      const m = k.meanings.slice(0, 2).join(', ');
+      if (m && m !== correct) pool.push(m);
+    }
+    const distractors = shuffle(pool).slice(0, 3);
+    choices = shuffle([correct, ...distractors]);
+    picked = null;
+  }
+
+  // Build choices whenever the card changes.
+  $effect(() => {
+    if (display) buildChoices();
+  });
+
+  async function pickChoice(i: number) {
+    if (picked !== null) return;
+    picked = i;
+    const isCorrect = choices[i] === correctChoice;
+    // Auto-grade: correct = 'good', wrong = 'again'
     if (!current) return;
+    const g: Grade = isCorrect ? 'good' : 'again';
     const next = grade(current, g);
     await putSrs(next);
+  }
+
+  function advance() {
     if (idx + 1 >= queue.length) {
       done = true;
     } else {
       idx += 1;
       showBack = false;
+      picked = null;
     }
   }
 </script>
@@ -133,44 +186,40 @@
   <div class="card">
     {#if display.kind === 'kanji' && display.kanji}
       <div class="kanji-big">{display.kanji.char}</div>
-      {#if showBack}
-        <div class="back-body">
-          <div class="readings">
-            <div><span class="lbl">On</span> {display.kanji.on.join('、') || '—'}</div>
-            <div><span class="lbl">Kun</span> {display.kanji.kun.join('、') || '—'}</div>
-          </div>
-          <div class="en">{display.kanji.meanings.join(', ')}</div>
-          <button onclick={() => speakJa([...display.kanji.on, ...display.kanji.kun][0] ?? display.kanji.char)} disabled={!ttsSupported()}>🔊</button>
-        </div>
-      {/if}
+      <p class="quiz-hint">What does this mean?</p>
     {:else if display.kind === 'word' && display.word}
       <div class="word-front">{display.word.jp}</div>
-      {#if showBack}
-        <div class="back-body">
-          <div class="reading">{display.word.reading}</div>
-          <div class="en">{display.word.meanings.join('; ')}</div>
-          <button onclick={() => speakJa(display.word.jp)} disabled={!ttsSupported()}>🔊</button>
-        </div>
-      {/if}
+      <div class="word-reading-hint">{display.word.reading}</div>
+      <p class="quiz-hint">What does this mean?</p>
     {/if}
   </div>
 
-  {#if !showBack}
+  <div class="choices">
+    {#each choices as choice, i}
+      <button
+        class="choice-btn"
+        class:correct={picked !== null && choice === correctChoice}
+        class:wrong={picked !== null && i === picked && choice !== correctChoice}
+        class:dimmed={picked !== null && choice !== correctChoice && i !== picked}
+        disabled={picked !== null}
+        onclick={() => pickChoice(i)}
+      >
+        {choice}
+      </button>
+    {/each}
+  </div>
+
+  {#if picked !== null}
     <div class="actions single">
-      <button class="primary" onclick={() => (showBack = true)}>Show answer</button>
-    </div>
-  {:else}
-    <div class="actions grade">
-      <button onclick={() => answer('again')}>Again</button>
-      <button onclick={() => answer('hard')}>Hard</button>
-      <button class="primary" onclick={() => answer('good')}>Good</button>
-      <button onclick={() => answer('easy')}>Easy</button>
+      <button class="primary" onclick={advance}>
+        {idx + 1 >= queue.length ? 'Finish' : 'Next →'}
+      </button>
     </div>
   {/if}
 
   {#if display.kind === 'kanji' && display.kanji}
     <div class="jump">
-      <a href={`/learn/${encodeURIComponent(display.kanji.char)}`} use:link onclick={() => push('/learn/' + encodeURIComponent(display.kanji.char))}>Open lesson →</a>
+      <a href={`/learn/${encodeURIComponent(display.kanji.char)}`} use:link>Open lesson →</a>
     </div>
   {:else if display.kind === 'word' && display.word}
     <div class="jump">
@@ -210,8 +259,46 @@
   .lbl { color: var(--fg-dim); font-size: 0.75rem; text-transform: uppercase; margin-right: 0.4em; }
   .reading { color: var(--fg-dim); font-size: 1.3rem; }
   .en { font-size: 1.1rem; }
+  .quiz-hint { color: var(--fg-dim); font-size: 0.9rem; margin: 0; }
+  .word-reading-hint { color: var(--accent); font-size: 1.2rem; }
+  .choices {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    max-width: 500px;
+    margin: 0 auto;
+  }
+  .choice-btn {
+    width: 100%;
+    padding: 0.9rem 1rem;
+    border-radius: 12px;
+    background: var(--bg-alt);
+    border: 1.5px solid var(--border);
+    color: var(--fg);
+    font-size: 0.95rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .choice-btn:hover:not(:disabled) {
+    background: var(--bg-elevated);
+    border-color: var(--fg-dim);
+  }
+  .choice-btn.correct {
+    background: rgba(94, 202, 124, 0.2);
+    border-color: var(--ok);
+    color: var(--ok);
+  }
+  .choice-btn.wrong {
+    background: rgba(255, 107, 107, 0.2);
+    border-color: var(--err);
+    color: var(--err);
+  }
+  .choice-btn.dimmed {
+    opacity: 0.4;
+  }
   .actions { display: flex; gap: 0.5rem; padding: 1rem; justify-content: center; }
-  .actions.grade button { flex: 1; max-width: 7rem; }
   .actions.single button { min-width: 12rem; }
   .jump { text-align: center; padding: 0.5rem 1rem 2rem; }
   .muted { color: var(--fg-dim); }
