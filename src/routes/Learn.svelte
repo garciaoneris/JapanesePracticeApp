@@ -87,6 +87,7 @@
   // movement) also switches but without a pre-seeded stroke.
   const VB = 109; // must match KanjiCanvas / PracticeMorph viewBox
   let learnStroke = $state<Point[] | undefined>(undefined);
+  let learnDrawing = $state(false); // true once the user drags — hides the animation SVG
   let _capturing = false;
   let _capturedPts: Point[] = [];
   let _capZone: HTMLDivElement | undefined;
@@ -111,18 +112,21 @@
   function learnMove(e: PointerEvent) {
     if (!_capturing) return;
     _capturedPts.push(_learnPt(e));
+    // First move = user is drawing, not just tapping. Hide the animation
+    // so they can see their stroke on a clean canvas.
+    if (!learnDrawing) learnDrawing = true;
   }
 
   function learnUp() {
     if (!_capturing) return;
     _capturing = false;
-    // If user dragged (>= 2 points), hand the stroke to Practice.
     if (_capturedPts.length >= 2) {
       learnStroke = _capturedPts;
     } else {
       learnStroke = undefined;
     }
     _capturedPts = [];
+    learnDrawing = false;
     step = 1 as Step;
   }
 </script>
@@ -176,9 +180,11 @@
           onpointerup={learnUp}
           onpointercancel={learnUp}
         >
-          {#key char + 'animate'}
-            <KanjiCanvas svg={kanji.svg} mode="animate" />
-          {/key}
+          <div class="anim-layer" class:hidden={learnDrawing}>
+            {#key char + 'animate'}
+              <KanjiCanvas svg={kanji.svg} mode="animate" />
+            {/key}
+          </div>
         </div>
         <div class="readings-grid">
           <div class="reading-block">
@@ -473,6 +479,10 @@
   }
   .canvas-tap-zone {
     cursor: pointer;
+  }
+  .anim-layer.hidden {
+    opacity: 0;
+    transition: opacity 0.15s;
   }
 
   .nav-row {
