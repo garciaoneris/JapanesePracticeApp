@@ -14,6 +14,9 @@ export interface SyncPayload {
   scores: Record<string, number>;
   srs: SrsState[];
   attempts: Array<Omit<Attempt, 'id'>>;
+  /** Per-kanji vocabulary quiz best scores (0–100%). Added after initial
+   *  release so older payloads may not have this field. */
+  quizScores?: Record<string, number>;
 }
 
 // ── Token management ─────────────────────────────────────────────────────
@@ -128,7 +131,10 @@ export async function collectLocal(): Promise<SyncPayload> {
     attCursor = await attCursor.continue();
   }
 
-  return { v: 1, ts: Date.now(), scores, srs, attempts };
+  // Quiz scores (vocabulary quiz best % per kanji)
+  const quizScores = (await getMeta<Record<string, number>>('quiz-scores')) ?? {};
+
+  return { v: 1, ts: Date.now(), scores, srs, attempts, quizScores };
 }
 
 // ── Push ─────────────────────────────────────────────────────────────────
@@ -204,6 +210,22 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
       }
     }
     await tx.done;
+  }
+
+  // ---- Merge quiz scores (max wins) ----
+  if (remote.quizScores) {
+    const local = (await getMeta<Record<string, number>>('quiz-scores')) ?? {};
+    let quizModified = false;
+    for (const [char, remoteScore] of Object.entries(remote.quizScores)) {
+      if (remoteScore > (local[char] ?? 0)) {
+        local[char] = remoteScore;
+        quizModified = true;
+      }
+    }
+    if (quizModified) {
+      await putMeta('quiz-scores', local);
+      modified = true;
+    }
   }
 
   return modified;
