@@ -3,8 +3,7 @@
   import { link } from 'svelte-spa-router';
   import { bundle } from '../lib/data/bundle';
   import { loadKnownKanji } from '../lib/data/known';
-  import { getAllBestScores } from '../lib/data/db';
-  import { scoreBg, scoreColor } from '../lib/score/color';
+  import { getAllBestScores, getMeta, putMeta } from '../lib/data/db';
   import type { Kanji, Word } from '../lib/data/types';
 
   // ── Helpers ──────────────────────────────────────────────────────────
@@ -45,11 +44,19 @@
 
   let knownKanji = $state<Set<string>>(new Set());
   let bestScores = $state<Map<string, number>>(new Map());
+  /** Quiz scores per kanji: char → percentage (0–100). Stored in IndexedDB
+   *  meta store as 'quiz-scores' — a separate scale from stroke-drawing. */
+  let quizScores = $state<Map<string, number>>(new Map());
 
   onMount(async () => {
-    const [known, scores] = await Promise.all([loadKnownKanji(), getAllBestScores()]);
+    const [known, scores, qs] = await Promise.all([
+      loadKnownKanji(),
+      getAllBestScores(),
+      getMeta<Record<string, number>>('quiz-scores'),
+    ]);
     knownKanji = known;
     bestScores = scores;
+    if (qs) quizScores = new Map(Object.entries(qs));
 
     // Deep-link: /vocabulary#kanji:下 opens words view for that kanji.
     const hash = window.location.hash;
@@ -199,6 +206,16 @@
   function nextQuestion(): void {
     if (quizIdx + 1 >= quizQuestions.length) {
       quizFinished = true;
+      // Save quiz score for this kanji (keep best).
+      if (selectedKanji) {
+        const pct = Math.round((quizCorrectCount / quizQuestions.length) * 100);
+        const prev = quizScores.get(selectedKanji) ?? 0;
+        const best = Math.max(prev, pct);
+        quizScores.set(selectedKanji, best);
+        quizScores = new Map(quizScores); // trigger reactivity
+        // Persist all quiz scores to IndexedDB.
+        putMeta('quiz-scores', Object.fromEntries(quizScores)).catch(() => {});
+      }
     } else {
       quizIdx++;
       quizPicked = null;
@@ -207,20 +224,38 @@
 
   const currentQuestion = $derived(quizQuestions[quizIdx]);
 
-  // ── Cell styling (reused from Home.svelte) ───────────────────────────
+  // ── Cell styling — based on QUIZ scores, not stroke scores ───────────
+  function quizCellColor(pct: number): string {
+    if (pct === 100) return '#ffd24a'; // gold = perfect
+    if (pct >= 50) {
+      const t = (pct - 50) / 50;
+      const r = Math.round(255 * (1 - t) + 94 * t);
+      const g = Math.round(180 * (1 - t) + 202 * t);
+      const b = Math.round(50 * (1 - t) + 124 * t);
+      return `rgb(${r},${g},${b})`;
+    }
+    if (pct > 0) return '#ff6b6b';
+    return '';
+  }
+
   function cellStyle(char: string): string {
-    const s = bestScores.get(char);
-    if (s === undefined) return '';
-    const border = scoreColor(s);
-    const bg = scoreBg(s);
-    return `border-color: ${border}; background: ${bg};`;
+    const s = quizScores.get(char);
+    if (s === undefined || s === 0) return '';
+    const c = quizCellColor(s);
+    return `border-color: ${c}; background: ${c}20;`;
   }
 
   function badgeStyle(char: string): string {
-    const s = bestScores.get(char);
-    if (s === undefined) return '';
-    const c = scoreColor(s);
-    return `color: ${c}; border-color: ${c};`;
+    const s = quizScores.get(char);
+    if (s === undefined) return 'color: var(--fg-dim); border-color: var(--border);';
+    const c = quizCellColor(s);
+    return c ? `color: ${c}; border-color: ${c};` : '';
+  }
+
+  function badgeText(char: string): string {
+    const s = quizScores.get(char);
+    if (s === undefined) return '—';
+    return `${s}%`;
   }
 
   // ── Navigation helpers ───────────────────────────────────────────────
@@ -284,16 +319,14 @@
         {#each masteredKanjiList as k (k.char)}
           <button
             class="cell"
-            class:gold={(bestScores.get(k.char) ?? 0) >= 85}
+            class:gold={(quizScores.get(k.char) ?? 0) === 100}
             style={cellStyle(k.char)}
             onclick={() => selectKanji(k.char)}
             aria-label={`${k.char} — ${k.meanings.join(', ')}`}
           >
             <span class="ch">{k.char}</span>
             <span class="lvl">{primaryReading(k.on, k.kun)}</span>
-            {#if bestScores.has(k.char)}
-              <span class="score-badge" style={badgeStyle(k.char)}>{bestScores.get(k.char)}</span>
-            {/if}
+            <span class="score-badge" style={badgeStyle(k.char)}>{badgeText(k.char)}</span>
           </button>
         {/each}
       </div>
