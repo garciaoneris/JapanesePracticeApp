@@ -50,6 +50,17 @@
     const [known, scores] = await Promise.all([loadKnownKanji(), getAllBestScores()]);
     knownKanji = known;
     bestScores = scores;
+
+    // Deep-link: /vocabulary#kanji:下 opens words view for that kanji.
+    const hash = window.location.hash;
+    const m = hash.match(/^#kanji:(.+)/);
+    if (m) {
+      const ch = decodeURIComponent(m[1]);
+      if (b.kanji[ch]) {
+        selectedKanji = ch;
+        mode = 'words';
+      }
+    }
   });
 
   const b = bundle();

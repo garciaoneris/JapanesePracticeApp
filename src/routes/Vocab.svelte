@@ -56,6 +56,9 @@
 <div class="nav-links">
   <a class="back" href="/" use:link>← Home</a>
   <a class="back" href="/vocabulary" use:link>← Back to vocabulary</a>
+  {#if word?.kanji?.length}
+    <a class="back" href={`/vocabulary#kanji:${encodeURIComponent(word.kanji[0])}`} use:link>← Back to {word.kanji[0]}</a>
+  {/if}
 </div>
 
 {#if !word}
@@ -146,7 +149,8 @@
 {/if}
 
 <style>
-  .back { display: inline-block; padding: 0.75rem 1rem; color: var(--fg-dim); }
+  .nav-links { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+  .back { display: inline-block; padding: 0.75rem 1rem; color: var(--fg-dim); font-size: 0.9rem; }
   .center { padding: 2rem; text-align: center; color: var(--fg-dim); }
   article { padding: 0 1rem 2rem; }
   header { text-align: center; padding: 0.5rem 0 1rem; }
