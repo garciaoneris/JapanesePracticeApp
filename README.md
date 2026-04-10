@@ -1,6 +1,6 @@
 # Japanese Practice PWA
 
-Practice Japanese vocabulary and kanji on an iPad (or anything with a modern browser). Ships as a Progressive Web App so it can be built on Windows and installed on an old iPad Pro without a Mac, Xcode, or an Apple Developer account.
+Practice Japanese vocabulary and kanji on anything with a modern browser. Ships as a Progressive Web App.
 
 ## What it does
 
@@ -72,21 +72,6 @@ The workflow sets `APP_BASE=/JapanesePracticeApp/` at build time so asset URLs a
 
 **Commit `public/data/bundle.json`**. It's a few MB and avoids running the Python pipeline in CI. If you'd rather build it in CI, add a step before `npm run build` that runs `python tools/build_bundle.py` with the source files fetched from somewhere (they are not freely redistributable inside a repo on GitHub without attribution — check each license first).
 
-## Installing on the iPad Pro (2016)
-
-1. Make sure the iPad is on iPadOS 16 (the last version supported on the 2016 Pro).
-2. Open `https://<your-user>.github.io/JapanesePracticeApp/` in **Safari** (not Chrome — only Safari can install PWAs on iOS).
-3. Share button → **Add to Home Screen**.
-4. Launch from the home-screen icon: fullscreen, no Safari chrome, offline-capable.
-5. Grant microphone permission the first time you use the "Speak it back" button.
-
-## iOS Safari quirks the app already handles
-
-- `speechSynthesis.getVoices()` returns empty until the `voiceschanged` event fires; the TTS wrapper waits for it.
-- Both TTS and STT require a direct user gesture for the first call in a session — the UI only triggers them from button handlers.
-- `webkitSpeechRecognition` is network-backed; offline STT silently fails. Errors surface in the UI with a message.
-- `continuous = true` is unreliable on iOS, so STT runs as single-shot.
-- The drawing canvas uses `touch-action: none` plus Pointer Events so Apple Pencil input isn't hijacked by page scrolling.
 
 ## Licenses of bundled dictionary sources
 
