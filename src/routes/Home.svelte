@@ -108,7 +108,7 @@
     <div class="cta-row">
       <a class="cta primary" href="/review" use:link>
         <span class="cta-icon">▶</span>
-        <span>Start review</span>
+        <span>Review{filter !== 'all' ? ` ${filter === 0 ? '—' : `N${filter}`}` : ''}</span>
       </a>
       <a class="cta secondary" href="/vocabulary" use:link>
         <span class="cta-icon">📘</span>

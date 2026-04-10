@@ -15,26 +15,60 @@
   let showBack = $state(false);
   let done = $state(false);
 
+  /** Read the JLPT filter from Home's sessionStorage. 'all' or a number 0-5. */
+  function getJlptFilter(): number | null {
+    const v = sessionStorage.getItem('home-jlpt-filter');
+    if (!v || v === 'all') return null;
+    const n = Number(v);
+    return [0, 1, 2, 3, 4, 5].includes(n) ? n : null;
+  }
+
+  let jlptFilter = $state<number | null>(null);
+  let jlptLabel = $derived(jlptFilter !== null && jlptFilter > 0 ? `N${jlptFilter}` : jlptFilter === 0 ? 'Ungraded' : '');
+
+  /** Does this SRS card belong to the active JLPT filter? */
+  function cardMatchesFilter(card: SrsState, b: ReturnType<typeof bundle>, jlpt: number): boolean {
+    if (card.kind === 'kanji') {
+      const ch = card.id.replace('kanji:', '');
+      const k = b.kanji[ch];
+      return k ? k.jlpt === jlpt : false;
+    }
+    // Word card: matches if ANY of its kanji is at the filtered level.
+    const wid = card.id.replace('word:', '');
+    const w = b.words[wid];
+    if (!w) return false;
+    return w.kanji.some((ch) => b.kanji[ch]?.jlpt === jlpt);
+  }
+
   async function buildQueue() {
     const now = Date.now();
-    const due = await dueSrs(now, 200);
+    const b = bundle();
+    jlptFilter = getJlptFilter();
+
+    let due = await dueSrs(now, 200);
+
+    // Filter due cards by JLPT level if a filter is active.
+    if (jlptFilter !== null) {
+      due = due.filter((c) => cardMatchesFilter(c, b, jlptFilter!));
+    }
 
     // Top up with new cards for kanji/words the user has already mastered
     // (score >= 80) but hasn't been quizzed on via SRS yet.
     if (due.length < NEW_PER_SESSION) {
-      const b = bundle();
       const scores = await getAllBestScores();
       const need = NEW_PER_SESSION - due.length;
       const newCandidates: SrsState[] = [];
       for (const k of Object.values(b.kanji)) {
         if (newCandidates.length >= need) break;
         if ((scores.get(k.char) ?? 0) < KNOWN_THRESHOLD) continue;
+        if (jlptFilter !== null && k.jlpt !== jlptFilter) continue;
         const id = `kanji:${k.char}`;
         if (!(await getSrs(id))) newCandidates.push(newCard(id, 'kanji', now));
       }
       for (const w of Object.values(b.words)) {
         if (newCandidates.length >= need) break;
         if (w.kanji.length > 0 && !w.kanji.every((c) => (scores.get(c) ?? 0) >= KNOWN_THRESHOLD)) continue;
+        if (jlptFilter !== null && !w.kanji.some((ch) => b.kanji[ch]?.jlpt === jlptFilter)) continue;
         const id = `word:${w.id}`;
         if (!(await getSrs(id))) newCandidates.push(newCard(id, 'word', now));
       }
@@ -82,6 +116,9 @@
 </script>
 
 <a class="back" href="/" use:link>← Back</a>
+{#if jlptLabel}
+  <div class="filter-tag">Reviewing: {jlptLabel} only</div>
+{/if}
 
 {#if done}
   <div class="center">
@@ -144,6 +181,13 @@
 
 <style>
   .back { display: inline-block; padding: 0.75rem 1rem; color: var(--fg-dim); }
+  .filter-tag {
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--accent);
+    padding: 0.25rem 0;
+    letter-spacing: 0.03em;
+  }
   .center { padding: 2rem; text-align: center; }
   .meta { text-align: center; color: var(--fg-dim); font-size: 0.85rem; padding: 0.5rem; }
   .card {
