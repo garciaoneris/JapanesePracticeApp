@@ -10,8 +10,12 @@
     kanji: Kanji;
     callouts?: Callout[];
     knownKanji?: ReadonlySet<string>;
+    /** Pre-seeded first stroke from the Learn canvas tap-zone. When the user
+     *  starts drawing on the animation canvas, Learn captures the stroke and
+     *  hands it off here so PracticeMorph renders it instantly on mount. */
+    initialStroke?: Point[];
   }
-  const { kanji, callouts = [], knownKanji }: Props = $props();
+  const { kanji, callouts = [], knownKanji, initialStroke }: Props = $props();
 
   // Callouts whose example sentences use only kanji the learner has mastered
   // (plus the current kanji itself). If filtering removes everything, fall
@@ -367,6 +371,14 @@
     canvas.width = size;
     canvas.height = size;
     host.style.width = host.style.height = `${size}px`;
+
+    // If the user started drawing on the Learn animation canvas, their first
+    // stroke was captured there and passed in. Pre-populate so it appears
+    // instantly without requiring the user to redraw it.
+    if (initialStroke && initialStroke.length >= 2) {
+      userStrokes = [initialStroke];
+      redraw();
+    }
   });
 </script>
 

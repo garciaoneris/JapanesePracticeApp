@@ -8,6 +8,7 @@
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { filterExamples, loadKnownKanji } from '../lib/data/known';
   import { exampleJp, type Example } from '../lib/data/types';
+  import type { Point } from '../lib/stroke/compare';
 
   interface Params {
     char: string;
@@ -78,6 +79,52 @@
     const r = kanji.kun[0] ?? kanji.on[0] ?? kanji.char;
     speakJa(r);
   }
+
+  // ── Learn → Practice stroke handoff ────────────────────────────────
+  // When the user starts drawing on the Learn animation canvas, we capture
+  // the stroke points. On pointerup we switch to Practice and pass the
+  // stroke so PracticeMorph renders it instantly. A simple tap (< 5px
+  // movement) also switches but without a pre-seeded stroke.
+  const VB = 109; // must match KanjiCanvas / PracticeMorph viewBox
+  let learnStroke = $state<Point[] | undefined>(undefined);
+  let _capturing = false;
+  let _capturedPts: Point[] = [];
+  let _capZone: HTMLDivElement | undefined;
+
+  function _learnPt(e: PointerEvent): Point {
+    if (!_capZone) return { x: 0, y: 0 };
+    // The canvas is the first .wrap child inside the tap-zone.
+    const wrap = _capZone.querySelector('.wrap') as HTMLElement | null;
+    const rect = (wrap ?? _capZone).getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * VB,
+      y: ((e.clientY - rect.top) / rect.height) * VB,
+    };
+  }
+
+  function learnDown(e: PointerEvent) {
+    _capturing = true;
+    _capturedPts = [_learnPt(e)];
+    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
+  }
+
+  function learnMove(e: PointerEvent) {
+    if (!_capturing) return;
+    _capturedPts.push(_learnPt(e));
+  }
+
+  function learnUp() {
+    if (!_capturing) return;
+    _capturing = false;
+    // If user dragged (>= 2 points), hand the stroke to Practice.
+    if (_capturedPts.length >= 2) {
+      learnStroke = _capturedPts;
+    } else {
+      learnStroke = undefined;
+    }
+    _capturedPts = [];
+    step = 1 as Step;
+  }
 </script>
 
 <a class="back" href="/" use:link>← Back</a>
@@ -119,9 +166,16 @@
         <h2>Watch the stroke order</h2>
         <p class="hint">Each stroke is drawn in order. Tap the canvas when you're ready to practice.</p>
         <div class="stroke-info"><b>{kanji.strokes}</b> strokes</div>
-        <!-- Touching the canvas area switches to Practice -->
+        <!-- Touching the canvas area captures a stroke and switches to Practice -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="canvas-tap-zone" onpointerdown={() => (step = 1 as Step)}>
+        <div
+          class="canvas-tap-zone"
+          bind:this={_capZone}
+          onpointerdown={learnDown}
+          onpointermove={learnMove}
+          onpointerup={learnUp}
+          onpointercancel={learnUp}
+        >
           {#key char + 'animate'}
             <KanjiCanvas svg={kanji.svg} mode="animate" />
           {/key}
@@ -160,7 +214,7 @@
         <h2>Draw it from memory</h2>
         <p class="hint">Draw any way you like — when you're done, your strokes will morph into the real shape.</p>
         {#key char + 'morph'}
-          <PracticeMorph {kanji} {callouts} {knownKanji} />
+          <PracticeMorph {kanji} {callouts} {knownKanji} initialStroke={learnStroke} />
         {/key}
       </div>
     {:else}
