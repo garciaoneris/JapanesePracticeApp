@@ -8,7 +8,6 @@
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { filterExamples, loadKnownKanji } from '../lib/data/known';
   import { exampleJp, type Example } from '../lib/data/types';
-  import type { Point } from '../lib/stroke/compare';
 
   interface Params {
     char: string;
@@ -48,11 +47,15 @@
   const examples = $derived(filteredExamples.kept.slice(0, 4));
   const tooAdvanced = $derived(filteredExamples.tooAdvanced);
 
-  // Callouts for the morph step come pre-computed from the bundle pipeline —
+  // Callouts for the morph step come pre-computed from the bundle pipeline --
   // each kanji carries up to 4 {word, reading, sentence} triples.
   const callouts = $derived(kanji?.callouts ?? []);
 
-  type Step = 0 | 1 | 2;
+  const STEPS = [
+    { key: 'practice', label: 'Practice' },
+    { key: 'examples', label: 'Examples' },
+  ] as const;
+  type Step = 0 | 1;
   let step = $state<Step>(0);
 
   // Reset progression whenever the kanji changes.
@@ -61,14 +64,8 @@
     step = 0;
   });
 
-  const STEPS = [
-    { key: 'learn', label: 'Learn' },
-    { key: 'practice', label: 'Practice' },
-    { key: 'examples', label: 'Examples' },
-  ] as const;
-
   function next() {
-    if (step < 2) step = (step + 1) as Step;
+    if (step < 1) step = (step + 1) as Step;
   }
   function prev() {
     if (step > 0) step = (step - 1) as Step;
@@ -78,92 +75,6 @@
     if (!kanji) return;
     const r = kanji.kun[0] ?? kanji.on[0] ?? kanji.char;
     speakJa(r);
-  }
-
-  // ── Learn → Practice stroke handoff ────────────────────────────────
-  // When the user starts drawing on the Learn animation canvas, we capture
-  // the stroke points. On pointerup we switch to Practice and pass the
-  // stroke so PracticeMorph renders it instantly. A simple tap (< 5px
-  // movement) also switches but without a pre-seeded stroke.
-  const VB = 109; // must match KanjiCanvas / PracticeMorph viewBox
-  let learnStroke = $state<Point[] | undefined>(undefined);
-  let learnDrawing = $state(false); // true once the user drags — hides the animation SVG
-  let _capturing = false;
-  let _capturedPts: Point[] = [];
-  let _capZone: HTMLDivElement | undefined;
-  let _drawCanvas: HTMLCanvasElement | undefined;
-
-  function _learnPt(e: PointerEvent): Point {
-    if (!_capZone) return { x: 0, y: 0 };
-    // The canvas is the first .wrap child inside the tap-zone.
-    const wrap = _capZone.querySelector('.wrap') as HTMLElement | null;
-    const rect = (wrap ?? _capZone).getBoundingClientRect();
-    return {
-      x: ((e.clientX - rect.left) / rect.width) * VB,
-      y: ((e.clientY - rect.top) / rect.height) * VB,
-    };
-  }
-
-  function learnDown(e: PointerEvent) {
-    _capturing = true;
-    _capturedPts = [_learnPt(e)];
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ok */ }
-    // Size the draw overlay to match the canvas area.
-    if (_drawCanvas && _capZone) {
-      const wrap = _capZone.querySelector('.wrap') as HTMLElement | null;
-      if (wrap) {
-        const sz = wrap.clientWidth;
-        _drawCanvas.width = sz;
-        _drawCanvas.height = sz;
-      }
-    }
-  }
-
-  function _renderLearnStroke() {
-    if (!_drawCanvas || _capturedPts.length < 2) return;
-    const ctx = _drawCanvas.getContext('2d');
-    if (!ctx) return;
-    const sx = _drawCanvas.width / VB;
-    const sy = _drawCanvas.height / VB;
-    ctx.clearRect(0, 0, _drawCanvas.width, _drawCanvas.height);
-    ctx.strokeStyle = '#ff7a59';
-    ctx.lineWidth = Math.max(4, _drawCanvas.width / 26);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(_capturedPts[0].x * sx, _capturedPts[0].y * sy);
-    for (let i = 1; i < _capturedPts.length; i++) {
-      ctx.lineTo(_capturedPts[i].x * sx, _capturedPts[i].y * sy);
-    }
-    ctx.stroke();
-  }
-
-  function learnMove(e: PointerEvent) {
-    if (!_capturing) return;
-    _capturedPts.push(_learnPt(e));
-    if (!learnDrawing) {
-      learnDrawing = true;
-      // Hide the entire SVG immediately via direct DOM manipulation so
-      // the kanji strokes and numbers vanish before the user's first
-      // stroke pixel appears. The canvas background + grid (CSS pseudo-
-      // elements on .wrap) stay visible.
-      const svg = _capZone?.querySelector('svg') as SVGElement | null;
-      if (svg) svg.style.opacity = '0';
-    }
-    _renderLearnStroke();
-  }
-
-  function learnUp() {
-    if (!_capturing) return;
-    _capturing = false;
-    if (_capturedPts.length >= 2) {
-      learnStroke = _capturedPts;
-    } else {
-      learnStroke = undefined;
-    }
-    _capturedPts = [];
-    learnDrawing = false;
-    step = 1 as Step;
   }
 </script>
 
@@ -201,37 +112,26 @@
 
   <section class="panel">
     {#if step === 0}
-      <!-- Step 1: Learn — animation + readings + TTS -->
-      <div class="learn-step">
-        <h2>Watch the stroke order</h2>
-        <p class="hint">Each stroke is drawn in order. Tap the canvas when you're ready to practice.</p>
-        <div class="stroke-info"><b>{kanji.strokes}</b> strokes</div>
-        <!-- Touching the canvas area captures a stroke and switches to Practice -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-          class="canvas-tap-zone"
-          class:drawing={learnDrawing}
-          bind:this={_capZone}
-          onpointerdown={learnDown}
-          onpointermove={learnMove}
-          onpointerup={learnUp}
-          onpointercancel={learnUp}
-        >
-          {#key char + 'animate'}
-            <KanjiCanvas svg={kanji.svg} mode="animate" />
-          {/key}
-          <canvas class="draw-overlay" bind:this={_drawCanvas}></canvas>
-        </div>
+      <!-- Step 0: Practice — animation + drawing + readings -->
+      <div class="practice-step">
+        {#key char + 'animate'}
+          <KanjiCanvas svg={kanji.svg} mode="animate" />
+        {/key}
+
+        {#key char + 'morph'}
+          <PracticeMorph {kanji} {callouts} {knownKanji} />
+        {/key}
+
         <div class="readings-grid">
           <div class="reading-block">
             <div class="reading-label">On'yomi</div>
             <div class="reading-vals">
               {#each kanji.on as r}
                 <button class="chip" onclick={() => speakJa(r)} disabled={!ttsSupported()}>
-                  <span>{r}</span> <span class="speaker">🔊</span>
+                  <span>{r}</span> <span class="speaker">&#x1f50a;</span>
                 </button>
               {/each}
-              {#if !kanji.on.length}<span class="muted">—</span>{/if}
+              {#if !kanji.on.length}<span class="muted">--</span>{/if}
             </div>
           </div>
           <div class="reading-block">
@@ -239,25 +139,16 @@
             <div class="reading-vals">
               {#each kanji.kun as r}
                 <button class="chip" onclick={() => speakJa(r)} disabled={!ttsSupported()}>
-                  <span>{r}</span> <span class="speaker">🔊</span>
+                  <span>{r}</span> <span class="speaker">&#x1f50a;</span>
                 </button>
               {/each}
-              {#if !kanji.kun.length}<span class="muted">—</span>{/if}
+              {#if !kanji.kun.length}<span class="muted">--</span>{/if}
             </div>
           </div>
         </div>
       </div>
-    {:else if step === 1}
-      <!-- Step 2: Practice — free-form drawing with morph -->
-      <div class="practice">
-        <h2>Draw it from memory</h2>
-        <p class="hint">Draw any way you like — when you're done, your strokes will morph into the real shape.</p>
-        {#key char + 'morph'}
-          <PracticeMorph {kanji} {callouts} {knownKanji} initialStroke={learnStroke} />
-        {/key}
-      </div>
     {:else}
-      <!-- Step 3: Examples with furigana + TTS -->
+      <!-- Step 1: Examples with furigana + TTS -->
       <div class="examples">
         <h2>See it in context</h2>
         {#if tooAdvanced && examples.length > 0}
@@ -286,7 +177,7 @@
                     class="speak-btn"
                     onclick={(e) => { e.stopPropagation(); speakJa(exampleJp(ex)); }}
                     aria-label="Speak whole sentence"
-                  >🔊</button>
+                  >&#x1f50a;</button>
                 </div>
                 <div class="ex-en">{ex.en}</div>
               </li>
@@ -299,20 +190,21 @@
 
   <div class="nav-row">
     <button onclick={prev} disabled={step === 0}>← Back</button>
-    <a class="btn home-btn" href="/" use:link>🏠 Home</a>
-    {#if step < 2}
+    <a class="btn home-btn" href="/" use:link>&#x1f3e0; Home</a>
+    {#if step === 0}
       <button class="primary" onclick={next}>Next →</button>
     {:else if words.length}
       <a class="btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
     {/if}
   </div>
 
-  {#if step === 2 && words.length > 1}
+  {#if step === 1 && words.length > 1}
     <section class="words-section">
       <h3>Words using {kanji.char}</h3>
       <div class="word-grid">
         {#each words.slice(0, 12) as w (w.id)}
-          <a class="word-card" href={`/vocab/${encodeURIComponent(w.id)}`} use:link>
+          <a class="word-card" href={`/vocab/${encodeURIComponent(w.id)}`} use:link
+             onclick={() => sessionStorage.setItem('vocab-from-learn', char)}>
             <div class="w-jp">{w.jp}</div>
             <div class="w-reading">{w.reading}</div>
             <div class="w-en">{w.meanings[0] ?? ''}</div>
@@ -390,7 +282,7 @@
 
   .stepper {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 0.4rem;
     padding: 0.5rem 1rem 0;
   }
@@ -445,14 +337,8 @@
     font-size: 1.2rem;
     font-weight: 600;
   }
-  .hint {
-    text-align: center;
-    color: var(--fg-dim);
-    margin: 0 0 1rem;
-    font-size: 0.9rem;
-  }
 
-  .learn-step .readings-grid {
+  .practice-step .readings-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.75rem;
@@ -491,39 +377,6 @@
   .chip .speaker {
     font-size: 0.7rem;
     opacity: 0.7;
-  }
-  .learn-step .primary.big {
-    display: block;
-    width: 100%;
-    margin-top: 1rem;
-    padding: 1rem;
-    font-size: 1.05rem;
-  }
-  /* Matches PracticeMorph's .hint-row height so the canvas sits at the
-     same vertical position on both Learn and Practice steps. */
-  .stroke-info {
-    text-align: center;
-    margin-bottom: 0.75rem;
-    color: var(--fg);
-    font-size: 1.05rem;
-  }
-  .canvas-tap-zone {
-    cursor: pointer;
-    position: relative;
-  }
-  /* When the user starts drawing, hide the entire SVG (strokes + numbers)
-     but keep the canvas background + grid (CSS pseudo-elements) visible. */
-  .canvas-tap-zone.drawing :global(svg) {
-    opacity: 0;
-  }
-  /* Transparent overlay canvas that renders the user's stroke in real-time. */
-  .draw-overlay {
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    pointer-events: none;
-    z-index: 2;
   }
 
   .nav-row {
@@ -666,7 +519,7 @@
   .muted { color: var(--fg-dim); }
 
   @media (max-width: 380px) {
-    .learn-step .readings-grid {
+    .practice-step .readings-grid {
       grid-template-columns: 1fr;
     }
     .step .lbl {

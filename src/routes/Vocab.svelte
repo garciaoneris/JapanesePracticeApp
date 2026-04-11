@@ -17,8 +17,13 @@
   // Known-kanji filter for the example list. The word's own kanji are always
   // treated as "known" while viewing its page — you're looking at them right now.
   let knownKanji = $state<Set<string>>(new Set());
+  /** If the user came here from a Learn page word grid, remember the kanji
+   *  so we can show a "Back to 山" link. */
+  let learnKanji = $state<string | null>(null);
   onMount(async () => {
     knownKanji = await loadKnownKanji();
+    learnKanji = sessionStorage.getItem('vocab-from-learn');
+    sessionStorage.removeItem('vocab-from-learn');
   });
 
   const filteredExamples = $derived.by(() => {
@@ -55,9 +60,12 @@
 
 <div class="nav-links">
   <a class="back" href="/" use:link>← Home</a>
-  <a class="back" href="/vocabulary" use:link>← Back to vocabulary</a>
+  <a class="back" href="/vocabulary" use:link>← Vocabulary</a>
+  {#if learnKanji}
+    <a class="back" href={`/learn/${encodeURIComponent(learnKanji)}`} use:link>← Back to {learnKanji}</a>
+  {/if}
   {#if word?.kanji?.length}
-    <button class="back" onclick={() => { sessionStorage.setItem('vocab-open-kanji', word.kanji[0]); window.location.hash = '#/vocabulary'; }}>← Back to {word.kanji[0]}</button>
+    <button class="back back-btn" onclick={() => { sessionStorage.setItem('vocab-open-kanji', word.kanji[0]); window.location.hash = '#/vocabulary'; }}>← {word.kanji[0]} words</button>
   {/if}
 </div>
 
@@ -151,6 +159,7 @@
 <style>
   .nav-links { display: flex; gap: 0.25rem; flex-wrap: wrap; }
   .back { display: inline-block; padding: 0.75rem 1rem; color: var(--fg-dim); font-size: 0.9rem; }
+  .back-btn { background: none; border: none; cursor: pointer; font-family: inherit; }
   .center { padding: 2rem; text-align: center; color: var(--fg-dim); }
   article { padding: 0 1rem 2rem; }
   header { text-align: center; padding: 0.5rem 0 1rem; }

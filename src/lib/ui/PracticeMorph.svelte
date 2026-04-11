@@ -5,17 +5,15 @@
   import { resample, type Point } from '../stroke/compare';
   import { appendAttempt, getBestScore, getRecentAttempts, putBestScoreIfBetter } from '../data/db';
   import { textUsesOnlyKnown } from '../data/known';
+  import Furigana from './Furigana.svelte';
+  import { bundle } from '../data/bundle';
 
   interface Props {
     kanji: Kanji;
     callouts?: Callout[];
     knownKanji?: ReadonlySet<string>;
-    /** Pre-seeded first stroke from the Learn canvas tap-zone. When the user
-     *  starts drawing on the animation canvas, Learn captures the stroke and
-     *  hands it off here so PracticeMorph renders it instantly on mount. */
-    initialStroke?: Point[];
   }
-  const { kanji, callouts = [], knownKanji, initialStroke }: Props = $props();
+  const { kanji, callouts = [], knownKanji }: Props = $props();
 
   // Callouts whose example sentences use only kanji the learner has mastered
   // (plus the current kanji itself). If filtering removes everything, fall
@@ -24,6 +22,21 @@
     if (!knownKanji || knownKanji.size === 0) return callouts;
     const kept = callouts.filter((c) => textUsesOnlyKnown(c.exJp, knownKanji, kanji.char));
     return kept.length > 0 ? kept : callouts;
+  });
+
+  /** Look up the pre-segmented example for the current callout so we can
+   *  render it with Furigana instead of plain text. */
+  const calloutSegs = $derived.by(() => {
+    if (!currentCallout) return null;
+    const b = bundle();
+    for (const w of Object.values(b.words)) {
+      if (w.jp === currentCallout.wordJp) {
+        for (const ex of w.examples) {
+          if (ex.en === currentCallout.exEn) return ex.segs;
+        }
+      }
+    }
+    return null;
   });
 
   // KanjiVG viewBox + how many points to resample per stroke during morph.
@@ -371,14 +384,6 @@
     canvas.width = size;
     canvas.height = size;
     host.style.width = host.style.height = `${size}px`;
-
-    // If the user started drawing on the Learn animation canvas, their first
-    // stroke was captured there and passed in. Pre-populate so it appears
-    // instantly without requiring the user to redraw it.
-    if (initialStroke && initialStroke.length >= 2) {
-      userStrokes = [initialStroke];
-      redraw();
-    }
   });
 </script>
 
@@ -446,7 +451,13 @@
       <span class="tag-reading">{currentCallout.wordReading}</span>
     </div>
     <div class="tag-en">{currentCallout.wordMeaning}</div>
-    <div class="tag-sentence">{currentCallout.exJp}</div>
+    <div class="tag-sentence">
+      {#if calloutSegs}
+        <Furigana segments={calloutSegs} knownKanji={knownKanji} currentKanji={kanji.char} />
+      {:else}
+        {currentCallout.exJp}
+      {/if}
+    </div>
     <div class="tag-sentence-en">{currentCallout.exEn}</div>
   </button>
 {/if}
@@ -455,13 +466,8 @@
   <button onclick={() => reset(true)} disabled={drawnCount === 0 && !morphed}>
     ↺ Restart
   </button>
-  {#if !morphed}
-    <button class="primary" onclick={onPrimary} disabled={!canMorph}>
-      ✨ Morph into kanji
-    </button>
-  {:else}
-    <button class="primary" onclick={() => reset(true)}>Draw again</button>
-    <button class="tertiary" onclick={onReplayFull} disabled={morphing}>↻ Full replay</button>
+  {#if morphed}
+    <button onclick={onReplayFull} disabled={morphing}>↻ Replay morph</button>
   {/if}
 </div>
 
