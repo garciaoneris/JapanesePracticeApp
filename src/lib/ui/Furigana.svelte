@@ -15,6 +15,9 @@
   }
   const { segments, knownKanji, currentKanji }: Props = $props();
 
+  // Container ref so we can scope tooltip queries to THIS instance.
+  let container: HTMLElement;
+
   // Tooltip state. We keep the anchor rect so the tooltip positions itself
   // directly above whichever word was tapped, with a small gap.
   let openIndex = $state<number | null>(null);
@@ -77,19 +80,22 @@
    *  in a loop) so the tiny position shift is imperceptible. */
   async function nudgeTooltipIfNeeded() {
     arrowNudge = 0;
-    await tick();                           // wait for Svelte to render the tooltip DOM
-    const tt = document.querySelector('.tooltip') as HTMLElement | null;
+    await tick();
+    // Query within THIS component's container, not the whole document.
+    // Multiple Furigana instances (Learn examples + PracticeMorph callout)
+    // can coexist; document.querySelector('.tooltip') would grab the wrong one.
+    const tt = container?.querySelector('.tooltip') as HTMLElement | null;
     if (!tt) return;
     const r = tt.getBoundingClientRect();
     const pad = 8;
     if (r.left < pad) {
       const dx = pad - r.left;
       tooltipLeft += dx;
-      arrowNudge = -dx;                    // shift arrow back toward the word
+      arrowNudge = -dx;
     } else if (r.right > window.innerWidth - pad) {
       const dx = r.right - window.innerWidth + pad;
       tooltipLeft -= dx;
-      arrowNudge = dx;                     // shift arrow back toward the word
+      arrowNudge = dx;
     }
   }
 
@@ -139,7 +145,7 @@
   // glued to its word instead of drifting off-screen.
   function reanchor() {
     if (openIndex === null) return;
-    const target = document.querySelector<HTMLElement>(`[data-gloss-idx="${openIndex}"]`);
+    const target = container?.querySelector<HTMLElement>(`[data-gloss-idx="${openIndex}"]`);
     if (target) positionTooltip(target);
   }
   $effect(() => {
@@ -153,7 +159,7 @@
   });
 </script>
 
-<span class="furi">
+<span class="furi-wrap" bind:this={container}><span class="furi">
   {#each segments as seg, i (i)}
     {@const mode = modeFor(seg)}
     {#if mode === 'ruby'}
@@ -196,6 +202,7 @@
     {tooltipText}
   </div>
 {/if}
+</span>
 
 <style>
   .furi {
