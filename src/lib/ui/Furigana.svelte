@@ -53,7 +53,7 @@
       position: fixed;
       left: ${tooltipLeft}px;
       top: ${tooltipTop}px;
-      transform: translate(-50%, calc(-100% - 10px));
+      transform: translate(-50%, calc(-100% - 6px));
       max-width: min(78vw, 360px);
       width: max-content;
       background: var(--bg-elevated, #262633);
@@ -137,9 +137,6 @@
 
   function positionTooltip(target: HTMLElement) {
     const rect = target.getBoundingClientRect();
-    // Position the tooltip horizontally centered on the word, vertically
-    // above it with a 10px gap. Coordinates are in viewport space so we can
-    // use position: fixed.
     tooltipLeft = rect.left + rect.width / 2;
     tooltipTop = rect.top;
   }
