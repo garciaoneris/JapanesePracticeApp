@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from 'svelte';
   import type { Segment } from '../data/types';
   import { speakJa } from '../speech/tts';
 
@@ -15,7 +14,9 @@
   }
   const { segments, knownKanji, currentKanji }: Props = $props();
 
-  // Container ref so we can scope tooltip queries to THIS instance.
+  import { onDestroy } from 'svelte';
+
+  // Container ref so we can scope gloss-idx queries to THIS instance.
   let container: HTMLElement;
 
   // Tooltip state. We keep the anchor rect so the tooltip positions itself
@@ -25,9 +26,77 @@
   let tooltipHue = $state<number>(0);
   let tooltipLeft = $state<number>(0);
   let tooltipTop = $state<number>(0);
-  /** When the tooltip box is nudged to stay on-screen, the arrow needs to
-   *  shift the opposite direction so it still points at the tapped word. */
   let arrowNudge = $state<number>(0);
+
+  // The tooltip is rendered as a direct child of <body> so it's never
+  // clipped or offset by parent transforms (e.g., animated callout cards).
+  let tooltipEl: HTMLDivElement | null = null;
+
+  function ensureTooltipEl(): HTMLDivElement {
+    if (!tooltipEl) {
+      tooltipEl = document.createElement('div');
+      tooltipEl.setAttribute('role', 'tooltip');
+      document.body.appendChild(tooltipEl);
+    }
+    return tooltipEl;
+  }
+
+  function updateTooltipDom() {
+    if (openIndex === null || !tooltipText) {
+      if (tooltipEl) tooltipEl.style.display = 'none';
+      return;
+    }
+    const el = ensureTooltipEl();
+    el.className = 'furigana-tooltip';
+    el.textContent = tooltipText;
+    el.style.cssText = `
+      position: fixed;
+      left: ${tooltipLeft}px;
+      top: ${tooltipTop}px;
+      transform: translate(-50%, calc(-100% - 10px));
+      max-width: min(78vw, 360px);
+      width: max-content;
+      background: var(--bg-elevated, #262633);
+      color: var(--fg, #f0f0f5);
+      border: 1.5px solid hsl(${tooltipHue}deg, 70%, 55%);
+      border-radius: 10px;
+      padding: 0.55rem 0.8rem;
+      font-size: 0.9rem;
+      font-family: -apple-system, 'Inter', system-ui, sans-serif;
+      box-shadow: 0 14px 36px rgba(0,0,0,0.5);
+      z-index: 10000;
+      pointer-events: none;
+      text-align: center;
+      line-height: 1.3;
+      display: block;
+    `;
+    // Measure and nudge if clipping viewport edges.
+    requestAnimationFrame(() => {
+      const r = el.getBoundingClientRect();
+      const pad = 8;
+      let nudge = 0;
+      if (r.left < pad) {
+        nudge = pad - r.left;
+      } else if (r.right > window.innerWidth - pad) {
+        nudge = -(r.right - window.innerWidth + pad);
+      }
+      if (nudge !== 0) {
+        tooltipLeft += nudge;
+        el.style.left = `${tooltipLeft}px`;
+      }
+      arrowNudge = -nudge;
+    });
+  }
+
+  $effect(() => {
+    // Re-run whenever tooltip state changes.
+    void openIndex; void tooltipText; void tooltipLeft; void tooltipTop; void tooltipHue;
+    updateTooltipDom();
+  });
+
+  onDestroy(() => {
+    if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; }
+  });
 
   // Deterministic golden-angle hue spacing: 73° gives adjacent segments
   // visibly distinct colors without clashing.
@@ -75,29 +144,6 @@
     tooltipTop = rect.top;
   }
 
-  /** After the tooltip renders, measure its actual bounding box and nudge it
-   *  horizontally if it overflows the viewport. This runs once per open (not
-   *  in a loop) so the tiny position shift is imperceptible. */
-  async function nudgeTooltipIfNeeded() {
-    arrowNudge = 0;
-    await tick();
-    // Query within THIS component's container, not the whole document.
-    // Multiple Furigana instances (Learn examples + PracticeMorph callout)
-    // can coexist; document.querySelector('.tooltip') would grab the wrong one.
-    const tt = container?.querySelector('.tooltip') as HTMLElement | null;
-    if (!tt) return;
-    const r = tt.getBoundingClientRect();
-    const pad = 8;
-    if (r.left < pad) {
-      const dx = pad - r.left;
-      tooltipLeft += dx;
-      arrowNudge = -dx;
-    } else if (r.right > window.innerWidth - pad) {
-      const dx = r.right - window.innerWidth + pad;
-      tooltipLeft -= dx;
-      arrowNudge = dx;
-    }
-  }
 
   function onWordTap(i: number, seg: Segment, e: Event) {
     // Stop the event from bubbling up to the "speak sentence" container, and
@@ -115,8 +161,6 @@
     tooltipHue = hueFor(i);
     // Speak just the word, not the whole sentence.
     speakJa(seg.t);
-    // After the tooltip DOM renders, nudge it if it clips the viewport.
-    nudgeTooltipIfNeeded();
   }
 
   function onKey(i: number, seg: Segment, e: KeyboardEvent) {
@@ -193,15 +237,6 @@
   {/each}
 </span>
 
-{#if openIndex !== null && tooltipText}
-  <div
-    class="tooltip"
-    style="left: {tooltipLeft}px; top: {tooltipTop}px; --hue: {tooltipHue}deg; --arrow-nudge: {arrowNudge}px"
-    role="tooltip"
-  >
-    {tooltipText}
-  </div>
-{/if}
 </span>
 
 <style>
@@ -242,44 +277,6 @@
     /* inline, no decoration */
   }
 
-  /* Tooltip is position: fixed in viewport space. `transform` pulls it up
-     above the anchor rect and horizontally centers it on the tap point. */
-  .tooltip {
-    position: fixed;
-    transform: translate(-50%, calc(-100% - 10px));
-    max-width: min(78vw, 360px);
-    width: max-content;
-    background: var(--bg-elevated);
-    color: var(--fg);
-    border: 1.5px solid hsl(var(--hue), 70%, 55%);
-    border-radius: 10px;
-    padding: 0.55rem 0.8rem;
-    font-size: 0.9rem;
-    font-family: -apple-system, 'Inter', system-ui, sans-serif;
-    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
-    z-index: 1000;
-    animation: tt-in 0.12s ease-out;
-    pointer-events: none;
-    text-align: center;
-    line-height: 1.3;
-  }
-  .tooltip::after {
-    /* Arrow pointing down to the anchor word. When the tooltip box is nudged
-       to stay on-screen, --arrow-nudge shifts the arrow back so it still
-       points at the original tap target. */
-    content: '';
-    position: absolute;
-    left: calc(50% + var(--arrow-nudge, 0px));
-    bottom: -6px;
-    width: 0;
-    height: 0;
-    transform: translateX(-50%);
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-top: 6px solid hsl(var(--hue), 70%, 55%);
-  }
-  @keyframes tt-in {
-    from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)); }
-    to   { opacity: 1; transform: translate(-50%, calc(-100% - 10px)); }
-  }
+  /* Tooltip styles are now inline (rendered as a body-level DOM node
+     in the script block) to avoid parent transform/clip issues. */
 </style>
