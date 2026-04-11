@@ -12,8 +12,12 @@
     kanji: Kanji;
     callouts?: Callout[];
     knownKanji?: ReadonlySet<string>;
+    /** Callback: fired when the reference animation visibility changes. */
+    onRefChange?: (visible: boolean) => void;
   }
-  const { kanji, callouts = [], knownKanji }: Props = $props();
+  const { kanji, callouts = [], knownKanji, onRefChange }: Props = $props();
+
+  let refVisible = $state(true);
 
   // Callouts whose example sentences use only kanji the learner has mastered
   // (plus the current kanji itself). If filtering removes everything, fall
@@ -41,6 +45,13 @@
 
   // KanjiVG viewBox + how many points to resample per stroke during morph.
   const VB = 109;
+  // Literal colors for SVG attributes (same as KanjiCanvas).
+  const C_FG = '#e8e8ea';
+  const C_ACCENT = '#ff7a59';
+
+  // ── reference animation state ─────────────────────────────────────────
+  let animating = $state(false);
+  let animTimer: ReturnType<typeof setTimeout> | null = null;
   const RESAMPLE_N = 64;
   const FULL_MORPH_MS = 1500;
   const QUICK_MORPH_MS = 350;
@@ -128,10 +139,104 @@
     };
   }
 
+  // ── reference stroke animation (ported from KanjiCanvas) ─────────────
+  function clearAnim() {
+    if (animTimer) { clearTimeout(animTimer); animTimer = null; }
+  }
+
+  function addStrokeNumber(x: number, y: number, n: number) {
+    const svgEl = host?.querySelector('svg');
+    if (!svgEl) return;
+    const NS = 'http://www.w3.org/2000/svg';
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', 'stroke-num');
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('cx', String(x));
+    c.setAttribute('cy', String(y));
+    c.setAttribute('r', '7');
+    c.setAttribute('fill', C_ACCENT);
+    c.setAttribute('stroke', '#fff');
+    c.setAttribute('stroke-width', '1');
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', String(x));
+    t.setAttribute('y', String(y + 2.8));
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('font-size', '8');
+    t.setAttribute('font-weight', '500');
+    t.setAttribute('fill', '#fff');
+    t.setAttribute('font-family', 'system-ui, sans-serif');
+    t.setAttribute('stroke', 'none');
+    t.textContent = String(n);
+    g.appendChild(c);
+    g.appendChild(t);
+    svgEl.appendChild(g);
+  }
+
+  function playAnimation() {
+    if (!refPaths.length) return;
+    clearAnim();
+    animating = true;
+    refVisible = true; onRefChange?.(true);
+
+    // Show the SVG.
+    const svgEl = host?.querySelector('svg') as SVGElement | null;
+    if (svgEl) svgEl.style.opacity = '1';
+
+    // Reset: hide all paths.
+    refPaths.forEach((p) => {
+      p.setAttribute('opacity', '0');
+      p.removeAttribute('stroke-dasharray');
+      p.removeAttribute('stroke-dashoffset');
+    });
+    // Clear existing number markers.
+    host?.querySelectorAll('.stroke-num').forEach((n) => n.remove());
+
+    let i = 0;
+    const PER_STROKE_MS = 700;
+    const GAP_MS = 180;
+
+    const playNext = () => {
+      if (i >= refPaths.length) {
+        animating = false;
+        return;
+      }
+      const p = refPaths[i];
+      const len = p.getTotalLength();
+      p.setAttribute('opacity', '1');
+      p.setAttribute('stroke', C_ACCENT);
+      p.setAttribute('stroke-dasharray', `${len}`);
+      p.setAttribute('stroke-dashoffset', `${len}`);
+      void p.getBoundingClientRect();
+      p.style.transition = `stroke-dashoffset ${PER_STROKE_MS}ms ease-out`;
+      p.setAttribute('stroke-dashoffset', '0');
+      animTimer = setTimeout(() => {
+        p.style.transition = '';
+        p.setAttribute('stroke', C_FG);
+        p.setAttribute('opacity', '0.85');
+        const start = p.getPointAtLength(0);
+        addStrokeNumber(start.x, start.y, i + 1);
+        i += 1;
+        animTimer = setTimeout(playNext, GAP_MS);
+      }, PER_STROKE_MS);
+    };
+    playNext();
+  }
+
+  /** Hide the reference SVG (used when the user starts drawing). */
+  function hideRef() {
+    const svgEl = host?.querySelector('svg') as SVGElement | null;
+    if (svgEl) svgEl.style.opacity = '0';
+    clearAnim();
+    animating = false;
+    refVisible = false; onRefChange?.(false);
+  }
+
   function onDown(e: PointerEvent) {
     if (morphing) return;
     // Auto-clear: starting a new stroke after morph resets for a fresh attempt.
     if (morphed) reset(true);
+    // Hide reference strokes on first touch.
+    if (refVisible) hideRef();
     drawing = true;
     // Wrap setPointerCapture: it can throw on non-trusted events (e.g. synthetic
     // pointer events from automation harnesses). If it fails we still capture
@@ -364,7 +469,7 @@
     return 'bad';
   }
 
-  // ── mount: parse the kanji SVG so we can sample reference paths ─────
+  // ── mount: parse the kanji SVG, show animation, set up canvas ─────
   onMount(() => {
     host.innerHTML = kanji.svg;
     const svgEl = host.querySelector('svg');
@@ -374,8 +479,9 @@
       svgEl.setAttribute('height', '100%');
       svgEl.style.position = 'absolute';
       svgEl.style.inset = '0';
-      svgEl.style.opacity = '0';
+      svgEl.style.opacity = '1';  // visible initially — animation plays
       svgEl.style.pointerEvents = 'none';
+      svgEl.style.transition = 'opacity 0.2s';
       refPaths = Array.from(svgEl.querySelectorAll('path'));
     }
 
@@ -384,6 +490,11 @@
     canvas.width = size;
     canvas.height = size;
     host.style.width = host.style.height = `${size}px`;
+
+    // Auto-play the reference animation on mount.
+    playAnimation();
+
+    return () => clearAnim();
   });
 </script>
 
@@ -463,12 +574,10 @@
 {/if}
 
 <div class="row">
-  <button onclick={() => reset(true)} disabled={drawnCount === 0 && !morphed}>
-    ↺ Restart
+  <button onclick={playAnimation} disabled={animating}>↻ Replay</button>
+  <button onclick={() => { reset(true); hideRef(); }} disabled={drawnCount === 0 && !morphed && !refVisible}>
+    ⌫ Erase
   </button>
-  {#if morphed}
-    <button onclick={onReplayFull} disabled={morphing}>↻ Replay morph</button>
-  {/if}
 </div>
 
 <style>

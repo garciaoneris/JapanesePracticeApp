@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { link } from 'svelte-spa-router';
-  import KanjiCanvas from '../lib/ui/KanjiCanvas.svelte';
   import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
+  import RevealKanji from '../lib/ui/RevealKanji.svelte';
   import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
@@ -76,6 +76,11 @@
     const r = kanji.kun[0] ?? kanji.on[0] ?? kanji.char;
     speakJa(r);
   }
+
+  /** Bound to PracticeMorph — true while the reference animation is visible,
+   *  false once the user starts drawing. Controls whether the hero shows the
+   *  plain glyph (visible) or the RevealKanji peek mode (hidden). */
+  let showingRef = $state(true);
 </script>
 
 <a class="back" href="/" use:link>← Back</a>
@@ -85,7 +90,13 @@
 {:else}
   <header class="head">
     <div class="kanji-hero">
-      <span class="kanji-glyph">{kanji.char}</span>
+      {#if showingRef || step === 1}
+        <span class="kanji-glyph">{kanji.char}</span>
+      {:else}
+        {#key char}
+          <RevealKanji svg={kanji.svg} strokeCount={kanji.strokes} />
+        {/key}
+      {/if}
       <div class="hero-meta">
         <div class="badges">
           <span class="badge n">N{kanji.jlpt}</span>
@@ -112,14 +123,10 @@
 
   <section class="panel">
     {#if step === 0}
-      <!-- Step 0: Practice — animation + drawing + readings -->
+      <!-- Step 0: Practice — single canvas with animation + drawing -->
       <div class="practice-step">
-        {#key char + 'animate'}
-          <KanjiCanvas svg={kanji.svg} mode="animate" />
-        {/key}
-
         {#key char + 'morph'}
-          <PracticeMorph {kanji} {callouts} {knownKanji} />
+          <PracticeMorph {kanji} {callouts} {knownKanji} onRefChange={(v) => (showingRef = v)} />
         {/key}
 
         <div class="readings-grid">
