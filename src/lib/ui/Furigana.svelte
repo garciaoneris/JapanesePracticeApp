@@ -204,10 +204,6 @@
   }
   ruby {
     ruby-position: over;
-    /* Prevent a kanji word from breaking across lines — keep the whole
-       ruby annotation together so furigana stays above its kanji. */
-    display: inline-block;
-    white-space: nowrap;
   }
   rt {
     font-size: 0.55em;
@@ -227,9 +223,6 @@
     -webkit-tap-highlight-color: transparent;
     border-radius: 2px;
     border-bottom: 2px solid hsla(var(--hue), 70%, 60%, 0.55);
-    /* Keep clickable words together on one line. */
-    display: inline-block;
-    white-space: nowrap;
     transition: border-color 0.15s, background 0.15s;
   }
   .glossable.clickable:hover,
