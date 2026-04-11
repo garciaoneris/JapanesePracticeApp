@@ -574,7 +574,7 @@
 {/if}
 
 <div class="row">
-  <button onclick={playAnimation} disabled={animating}>↻ Replay</button>
+  <button onclick={() => { reset(true); playAnimation(); }} disabled={animating}>↻ Replay</button>
   <button onclick={() => { reset(true); hideRef(); }} disabled={drawnCount === 0 && !morphed && !refVisible}>
     ⌫ Erase
   </button>
