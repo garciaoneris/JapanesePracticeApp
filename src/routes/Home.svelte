@@ -173,7 +173,7 @@
         href={`/learn/${encodeURIComponent(k.char)}`}
         use:link
         aria-label={k.meanings.join(', ')}
-        style={cellStyle(k.char)}
+        style="{cellStyle(k.char)} --s1d: {((k.char.codePointAt(0) ?? 0) % 22) * 0.1}s; --s2d: {((k.char.codePointAt(0) ?? 0) % 17) * 0.15}s; --s1x: {15 + ((k.char.codePointAt(0) ?? 0) % 40)}%; --s2x: {50 + ((k.char.codePointAt(0) ?? 0) % 30)}%;"
       >
         <span class="ch">{k.char}</span>
         <span class="lvl">{primaryReading(k.kun, k.on)}</span>
@@ -357,8 +357,9 @@
     border-color: #e5e4e2;
     box-shadow: 0 0 0 1.5px #e5e4e2, 0 0 12px rgba(229, 228, 226, 0.3);
   }
-  /* Three sparkle dots rising from random-ish positions.
-     Each uses a different duration + delay so cells don't sync up. */
+  /* Sparkle dots rising upward. --s1d/--s2d (delay) and --s1x/--s2x
+     (horizontal %) are computed per cell from the kanji codepoint in
+     the template, so each cell sparkles at a different time/place. */
   .cell.shiny-gold::before,
   .cell.shiny-gold::after,
   .cell.shiny-platinum::before,
@@ -369,10 +370,10 @@
     pointer-events: none;
     opacity: 0;
   }
-  .cell.shiny-gold::before   { color: #ffd24a; left: 25%; animation: sparkle-rise 2.2s ease-out infinite; }
-  .cell.shiny-gold::after    { color: #ffe88a; left: 65%; animation: sparkle-rise 2.8s ease-out 0.9s infinite; }
-  .cell.shiny-platinum::before { color: #e5e4e2; left: 30%; animation: sparkle-rise 2.4s ease-out 0.3s infinite; }
-  .cell.shiny-platinum::after  { color: #f8f8ff; left: 70%; animation: sparkle-rise 2.6s ease-out 1.1s infinite; }
+  .cell.shiny-gold::before    { color: #ffd24a; left: var(--s1x); animation: sparkle-rise 2.2s ease-out var(--s1d) infinite; }
+  .cell.shiny-gold::after     { color: #ffe88a; left: var(--s2x); animation: sparkle-rise 2.8s ease-out var(--s2d) infinite; }
+  .cell.shiny-platinum::before { color: #e5e4e2; left: var(--s1x); animation: sparkle-rise 2.4s ease-out var(--s1d) infinite; }
+  .cell.shiny-platinum::after  { color: #f8f8ff; left: var(--s2x); animation: sparkle-rise 2.6s ease-out var(--s2d) infinite; }
   @keyframes sparkle-rise {
     0%   { bottom: 10%; opacity: 0; transform: scale(0.5); }
     15%  { opacity: 1; transform: scale(1.2); }
