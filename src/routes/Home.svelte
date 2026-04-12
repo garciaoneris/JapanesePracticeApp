@@ -183,7 +183,7 @@
         href={`/learn/${encodeURIComponent(k.char)}`}
         use:link
         aria-label={k.meanings.join(', ')}
-        style="{cellStyle(k.char)} --s1d: {((k.char.codePointAt(0) ?? 0) % 22) * 0.1}s; --s2d: {((k.char.codePointAt(0) ?? 0) % 17) * 0.15}s; --s1x: {15 + ((k.char.codePointAt(0) ?? 0) % 40)}%; --s2x: {50 + ((k.char.codePointAt(0) ?? 0) % 30)}%;"
+        style={cellStyle(k.char)}
       >
         <span class="ch">{k.char}</span>
         <span class="lvl">{primaryReading(k.kun, k.on)}</span>
@@ -354,43 +354,29 @@
     border-color: var(--err);
     background: rgba(255, 107, 107, 0.1);
   }
-  /* ── Sparkle effect for shiny-gold and shiny-platinum cells ────────── */
-  .cell.shiny-gold,
-  .cell.shiny-platinum {
-    overflow: hidden;
-  }
+  /* ── Shiny cells: static glow on score badge, no animations ───────── */
   .cell.shiny-gold {
     border-color: #ffd24a;
-    box-shadow: 0 0 0 1.5px #ffd24a, 0 0 12px rgba(255, 210, 74, 0.3);
+    box-shadow: 0 0 0 1.5px rgba(255, 210, 74, 0.4);
   }
   .cell.shiny-platinum {
     border-color: #e5e4e2;
-    box-shadow: 0 0 0 1.5px #e5e4e2, 0 0 12px rgba(229, 228, 226, 0.3);
+    box-shadow: 0 0 0 1.5px rgba(229, 228, 226, 0.4);
     background: linear-gradient(135deg, #3a3a42, #2e2e38) !important;
     color: #e5e4e2;
   }
-  /* Sparkle dots rising upward. --s1d/--s2d (delay) and --s1x/--s2x
-     (horizontal %) are computed per cell from the kanji codepoint in
-     the template, so each cell sparkles at a different time/place. */
-  .cell.shiny-gold::before,
-  .cell.shiny-gold::after,
-  .cell.shiny-platinum::before,
-  .cell.shiny-platinum::after {
-    content: '✦';
-    position: absolute;
-    font-size: 0.45rem;
-    pointer-events: none;
-    opacity: 0;
+  /* Glowing score badge for shiny tiers */
+  .cell.shiny-gold > .score-badge {
+    background: rgba(255, 210, 74, 0.25);
+    border-color: #ffd24a;
+    color: #ffd24a;
+    box-shadow: 0 0 8px rgba(255, 210, 74, 0.6), 0 0 3px rgba(255, 210, 74, 0.4);
   }
-  .cell.shiny-gold::before    { color: #ffd24a; left: var(--s1x); animation: sparkle-rise 2.2s ease-out var(--s1d) infinite; }
-  .cell.shiny-gold::after     { color: #ffe88a; left: var(--s2x); animation: sparkle-rise 2.8s ease-out var(--s2d) infinite; }
-  .cell.shiny-platinum::before { color: #e5e4e2; left: var(--s1x); animation: sparkle-rise 2.4s ease-out var(--s1d) infinite; }
-  .cell.shiny-platinum::after  { color: #f8f8ff; left: var(--s2x); animation: sparkle-rise 2.6s ease-out var(--s2d) infinite; }
-  @keyframes sparkle-rise {
-    0%   { bottom: 10%; opacity: 0; transform: scale(0.5); }
-    15%  { opacity: 1; transform: scale(1.2); }
-    60%  { opacity: 0.7; transform: scale(1); }
-    100% { bottom: 95%; opacity: 0; transform: scale(0.4); }
+  .cell.shiny-platinum > .score-badge {
+    background: rgba(229, 228, 226, 0.25);
+    border-color: #e5e4e2;
+    color: #e5e4e2;
+    box-shadow: 0 0 8px rgba(229, 228, 226, 0.6), 0 0 3px rgba(229, 228, 226, 0.4);
   }
   .ch { font-size: 1.9rem; line-height: 1; }
   .lvl {
