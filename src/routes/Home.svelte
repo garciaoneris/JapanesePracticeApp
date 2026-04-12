@@ -73,6 +73,10 @@
   });
 
   function cellStyle(char: string): string {
+    // Shiny tiers use CSS class styling — skip inline colors so they don't
+    // override the silver border/background on platinum cells.
+    const tier = badgeTier(char);
+    if (tier === 'shiny-gold' || tier === 'shiny-platinum') return '';
     const s = bestScores.get(char);
     if (s === undefined) return '';
     const border = scoreColor(s);
@@ -81,6 +85,9 @@
   }
 
   function badgeStyle(char: string): string {
+    // Shiny tiers get their badge styled entirely via CSS (gold glow / silver glow).
+    const tier = badgeTier(char);
+    if (tier === 'shiny-gold' || tier === 'shiny-platinum') return '';
     const s = bestScores.get(char);
     if (s === undefined) return '';
     const c = scoreColor(s);
