@@ -57,7 +57,7 @@
     // Top up with new cards for kanji/words the user has already mastered
     // (score >= 80) but hasn't been quizzed on via SRS yet.
     if (due.length < NEW_PER_SESSION) {
-      const native = await getMeta<boolean>('native-mode');
+      const native = (await getMeta<boolean>('native-mode')) === true;
       const scores = await getAllBestScores();
       const need = NEW_PER_SESSION - due.length;
       const newCandidates: SrsState[] = [];
