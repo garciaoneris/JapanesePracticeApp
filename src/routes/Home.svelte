@@ -26,18 +26,31 @@
     words: Object.keys(b.words).length,
   });
 
-  type JlptFilter = 'all' | 5 | 4 | 3 | 2 | 1 | 0;
+  // Levels: 1=easiest(N5) .. 5=ungraded. Level 3 merges old N3+N2.
+  type LevelFilter = 'all' | 1 | 2 | 3 | 4 | 5;
   const FILTER_KEY = 'home-jlpt-filter';
-  function loadFilter(): JlptFilter {
+  /** Map level → which jlpt values it includes */
+  const LEVEL_JLPT: Record<number, number[]> = {
+    1: [5],       // N5
+    2: [4],       // N4
+    3: [3, 2],    // N3 + N2 merged
+    4: [1],       // N1
+    5: [0],       // ungraded
+  };
+  function loadFilter(): LevelFilter {
     const v = sessionStorage.getItem(FILTER_KEY);
     if (v === 'all') return 'all';
     const n = Number(v);
-    if ([0, 1, 2, 3, 4, 5].includes(n)) return n as JlptFilter;
+    if ([1, 2, 3, 4, 5].includes(n)) return n as LevelFilter;
     return 'all';
   }
-  let filter = $state<JlptFilter>(loadFilter());
+  let filter = $state<LevelFilter>(loadFilter());
   $effect(() => { sessionStorage.setItem(FILTER_KEY, String(filter)); });
-  const filtered = $derived(filter === 'all' ? kanjiList : kanjiList.filter((k) => k.jlpt === filter));
+  const filtered = $derived(
+    filter === 'all'
+      ? kanjiList
+      : kanjiList.filter((k) => LEVEL_JLPT[filter]?.includes(k.jlpt)),
+  );
 
   // Map of kanji char → best score (0-100). Loaded once on mount — svelte-spa-router
   // re-mounts Home on every navigation back, so this is always fresh.
@@ -146,7 +159,7 @@
     <p class="kicker">日本語</p>
     <h1>Japanese Practice</h1>
     <p class="muted">
-      {counts.kanji} kanji · {counts.words.toLocaleString()} words · JLPT N5–N1
+      {counts.kanji} kanji · {counts.words.toLocaleString()} words · Levels 1–5
       {#if bestScores.size > 0}
         <br />
         <span class="progress-line">
@@ -157,7 +170,7 @@
     <div class="cta-row">
       <a class="cta primary" href="/review" use:link>
         <span class="cta-icon">▶</span>
-        <span>Review{filter !== 'all' ? ` ${filter === 0 ? '—' : `N${filter}`}` : ''}</span>
+        <span>Review{filter !== 'all' ? ` Lvl ${filter}` : ''}</span>
       </a>
       <a class="cta secondary" href="/vocabulary" use:link>
         <span class="cta-icon">📘</span>
@@ -172,12 +185,11 @@
     <h2>Kanji</h2>
     <div class="filters">
       <button class:active={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
-      <button class:active={filter === 5} onclick={() => (filter = 5)}>N5</button>
-      <button class:active={filter === 4} onclick={() => (filter = 4)}>N4</button>
-      <button class:active={filter === 3} onclick={() => (filter = 3)}>N3</button>
-      <button class:active={filter === 2} onclick={() => (filter = 2)}>N2</button>
-      <button class:active={filter === 1} onclick={() => (filter = 1)}>N1</button>
-      <button class:active={filter === 0} onclick={() => (filter = 0)} title="Jouyou / jinmeiyou kanji without a JLPT tag">—</button>
+      <button class:active={filter === 1} onclick={() => (filter = 1)}>Lvl 1</button>
+      <button class:active={filter === 2} onclick={() => (filter = 2)}>Lvl 2</button>
+      <button class:active={filter === 3} onclick={() => (filter = 3)}>Lvl 3</button>
+      <button class:active={filter === 4} onclick={() => (filter = 4)}>Lvl 4</button>
+      <button class:active={filter === 5} onclick={() => (filter = 5)}>Lvl 5</button>
     </div>
   </div>
 

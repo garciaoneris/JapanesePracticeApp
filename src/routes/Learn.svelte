@@ -99,7 +99,7 @@
       {/if}
       <div class="hero-meta">
         <div class="badges">
-          <span class="badge n">N{kanji.jlpt}</span>
+          <span class="badge n">Lvl {({5:1, 4:2, 3:3, 2:3, 1:4, 0:5} as Record<number,number>)[kanji.jlpt] ?? '?'}</span>
           <span class="badge">{kanji.strokes} strokes</span>
         </div>
         <p class="meaning">{kanji.meanings.slice(0, 3).join(' · ')}</p>

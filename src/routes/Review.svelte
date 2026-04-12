@@ -17,35 +17,40 @@
   let done = $state(false);
   let reviewResults = $state<Map<string, {correct: number, total: number}>>(new Map());
 
-  /** Read the JLPT filter from Home's sessionStorage. 'all' or a number 0-5. */
-  function getJlptFilter(): number | null {
+  /** Level → jlpt values mapping (same as Home.svelte). */
+  const LEVEL_JLPT: Record<number, number[]> = {
+    1: [5], 2: [4], 3: [3, 2], 4: [1], 5: [0],
+  };
+
+  /** Read the level filter from Home's sessionStorage. */
+  function getLevelFilter(): number | null {
     const v = sessionStorage.getItem('home-jlpt-filter');
     if (!v || v === 'all') return null;
     const n = Number(v);
-    return [0, 1, 2, 3, 4, 5].includes(n) ? n : null;
+    return [1, 2, 3, 4, 5].includes(n) ? n : null;
   }
 
-  let jlptFilter = $state<number | null>(null);
-  let jlptLabel = $derived(jlptFilter !== null && jlptFilter > 0 ? `N${jlptFilter}` : jlptFilter === 0 ? 'Ungraded' : '');
+  let levelFilter = $state<number | null>(null);
+  let levelLabel = $derived(levelFilter !== null ? `Lvl ${levelFilter}` : '');
 
-  /** Does this SRS card belong to the active JLPT filter? */
-  function cardMatchesFilter(card: SrsState, b: ReturnType<typeof bundle>, jlpt: number): boolean {
+  /** Does this SRS card belong to the active level filter? */
+  function cardMatchesFilter(card: SrsState, b: ReturnType<typeof bundle>, level: number): boolean {
+    const jlpts = LEVEL_JLPT[level] ?? [];
     if (card.kind === 'kanji') {
       const ch = card.id.replace('kanji:', '');
       const k = b.kanji[ch];
-      return k ? k.jlpt === jlpt : false;
+      return k ? jlpts.includes(k.jlpt) : false;
     }
-    // Word card: matches if ANY of its kanji is at the filtered level.
     const wid = card.id.replace('word:', '');
     const w = b.words[wid];
     if (!w) return false;
-    return w.kanji.some((ch) => b.kanji[ch]?.jlpt === jlpt);
+    return w.kanji.some((ch) => jlpts.includes(b.kanji[ch]?.jlpt ?? -1));
   }
 
   async function buildQueue() {
     const now = Date.now();
     const b = bundle();
-    jlptFilter = getJlptFilter();
+    levelFilter = getLevelFilter();
 
     let due = await dueSrs(now, 200);
     const native = (await getMeta<boolean>('native-mode')) === true;
@@ -54,7 +59,7 @@
     // Filter due cards: only show kanji the user has actually mastered
     // (or all kanji in native mode). Also filter by JLPT level if active.
     due = due.filter((c) => {
-      if (jlptFilter !== null && !cardMatchesFilter(c, b, jlptFilter)) return false;
+      if (levelFilter !== null && !cardMatchesFilter(c, b, levelFilter!)) return false;
       if (native) return true;
       // Check mastery for this card's kanji
       if (c.kind === 'kanji') {
@@ -75,14 +80,14 @@
       for (const k of Object.values(b.kanji)) {
         if (newCandidates.length >= need) break;
         if (!native && (scores.get(k.char) ?? 0) < KNOWN_THRESHOLD) continue;
-        if (jlptFilter !== null && k.jlpt !== jlptFilter) continue;
+        if (levelFilter !== null && !LEVEL_JLPT[levelFilter]?.includes(k.jlpt)) continue;
         const id = `kanji:${k.char}`;
         if (!(await getSrs(id))) newCandidates.push(newCard(id, 'kanji', now));
       }
       for (const w of Object.values(b.words)) {
         if (newCandidates.length >= need) break;
         if (!native && w.kanji.length > 0 && !w.kanji.every((c) => (scores.get(c) ?? 0) >= KNOWN_THRESHOLD)) continue;
-        if (jlptFilter !== null && !w.kanji.some((ch) => b.kanji[ch]?.jlpt === jlptFilter)) continue;
+        if (levelFilter !== null && !w.kanji.some((ch) => LEVEL_JLPT[levelFilter!]?.includes(b.kanji[ch]?.jlpt ?? -1))) continue;
         const id = `word:${w.id}`;
         if (!(await getSrs(id))) newCandidates.push(newCard(id, 'word', now));
       }
@@ -164,7 +169,6 @@
     if (picked !== null) return;
     picked = i;
     const isCorrect = choices[i] === correctChoice;
-    // Auto-grade: correct = 'good', wrong = 'again'
     if (!current) return;
     const g: Grade = isCorrect ? 'good' : 'again';
     const next = grade(current, g);
@@ -176,6 +180,16 @@
       : current.id.replace('word:', '').charAt(0);
     const prev = reviewResults.get(ch) ?? { correct: 0, total: 0 };
     reviewResults.set(ch, { correct: prev.correct + (isCorrect ? 1 : 0), total: prev.total + 1 });
+
+    // Speak the reading aloud after answering.
+    if (display) {
+      if (display.kind === 'kanji' && display.kanji) {
+        const r = display.kanji.kun[0] ?? display.kanji.on[0] ?? display.kanji.char;
+        speakJa(r);
+      } else if (display.kind === 'word' && display.word) {
+        speakJa(display.word.jp);
+      }
+    }
   }
 
   async function advance() {
@@ -198,8 +212,8 @@
 </script>
 
 <a class="back" href="/" use:link>← Back</a>
-{#if jlptLabel}
-  <div class="filter-tag">Reviewing: {jlptLabel} only</div>
+{#if levelLabel}
+  <div class="filter-tag">Reviewing: {levelLabel} only</div>
 {/if}
 
 {#if done}
@@ -239,6 +253,17 @@
   </div>
 
   {#if picked !== null}
+    <!-- Show reading + meaning after answering -->
+    <div class="answer-reveal">
+      {#if display.kind === 'kanji' && display.kanji}
+        <div class="reveal-reading">{display.kanji.on.join('、')} · {display.kanji.kun.map((r) => r.replace(/[.\-]/g, '')).join('、')}</div>
+        <div class="reveal-meaning">{display.kanji.meanings.join(', ')}</div>
+      {:else if display.kind === 'word' && display.word}
+        <div class="reveal-reading">{display.word.reading}</div>
+        <div class="reveal-meaning">{display.word.meanings.join('; ')}</div>
+      {/if}
+    </div>
+
     <div class="actions single">
       <button class="primary" onclick={advance}>
         {idx + 1 >= queue.length ? 'Finish' : 'Next →'}
@@ -326,6 +351,20 @@
   }
   .choice-btn.dimmed {
     opacity: 0.4;
+  }
+  .answer-reveal {
+    text-align: center;
+    padding: 0.75rem 1rem 0;
+  }
+  .reveal-reading {
+    font-size: 1.2rem;
+    color: var(--accent);
+    font-family: 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
+  }
+  .reveal-meaning {
+    font-size: 0.95rem;
+    color: var(--fg);
+    margin-top: 0.25rem;
   }
   .actions { display: flex; gap: 0.5rem; padding: 1rem; justify-content: center; }
   .actions.single button { min-width: 12rem; }
