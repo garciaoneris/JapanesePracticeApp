@@ -344,21 +344,73 @@
     border-color: var(--err);
     background: rgba(255, 107, 107, 0.1);
   }
+  /* ── Sparkle effect for shiny-gold and shiny-platinum cells ────────── */
+  .cell.shiny-gold,
+  .cell.shiny-platinum {
+    overflow: hidden;
+  }
   .cell.shiny-gold {
     border-color: #ffd24a;
-    animation: shimmer-gold 2s ease-in-out infinite;
+    box-shadow: 0 0 0 1.5px #ffd24a, 0 0 12px rgba(255, 210, 74, 0.3);
   }
   .cell.shiny-platinum {
     border-color: #e5e4e2;
-    animation: shimmer-plat 2s ease-in-out infinite;
+    box-shadow: 0 0 0 1.5px #e5e4e2, 0 0 12px rgba(229, 228, 226, 0.3);
   }
-  @keyframes shimmer-gold {
-    0%, 100% { box-shadow: 0 0 0 2px #ffd24a, 0 0 8px rgba(255,210,74,0.3); }
-    50% { box-shadow: 0 0 0 2px #ffd24a, 0 0 18px rgba(255,210,74,0.6); }
+  /* Diagonal light sweep across the cell */
+  .cell.shiny-gold::before,
+  .cell.shiny-platinum::before {
+    content: '';
+    position: absolute;
+    inset: -50%;
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 340deg,
+      rgba(255, 255, 255, 0.25) 345deg,
+      rgba(255, 255, 255, 0.45) 350deg,
+      rgba(255, 255, 255, 0.25) 355deg,
+      transparent 360deg
+    );
+    animation: sparkle-rotate 3s linear infinite;
+    pointer-events: none;
   }
-  @keyframes shimmer-plat {
-    0%, 100% { box-shadow: 0 0 0 2px #e5e4e2, 0 0 8px rgba(229,228,226,0.3); }
-    50% { box-shadow: 0 0 0 2px #e5e4e2, 0 0 18px rgba(229,228,226,0.6); }
+  .cell.shiny-platinum::before {
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 335deg,
+      rgba(229, 228, 226, 0.3) 340deg,
+      rgba(255, 255, 255, 0.5) 350deg,
+      rgba(229, 228, 226, 0.3) 355deg,
+      transparent 360deg
+    );
+  }
+  /* Small sparkle dot that floats around */
+  .cell.shiny-gold::after,
+  .cell.shiny-platinum::after {
+    content: '✦';
+    position: absolute;
+    font-size: 0.5rem;
+    color: #ffd24a;
+    opacity: 0;
+    pointer-events: none;
+    animation: sparkle-dot 2.5s ease-in-out infinite;
+  }
+  .cell.shiny-platinum::after {
+    color: #f0efe8;
+    animation-delay: 0.4s;
+  }
+  @keyframes sparkle-rotate {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  @keyframes sparkle-dot {
+    0%   { opacity: 0; top: 70%; left: 20%; transform: scale(0.5); }
+    20%  { opacity: 1; transform: scale(1.2); }
+    50%  { opacity: 0.8; top: 20%; left: 60%; transform: scale(1); }
+    80%  { opacity: 1; top: 30%; left: 80%; transform: scale(1.3); }
+    100% { opacity: 0; top: 10%; left: 30%; transform: scale(0.5); }
   }
   .ch { font-size: 1.9rem; line-height: 1; }
   .lvl {
