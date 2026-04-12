@@ -4,7 +4,7 @@
   import { bundle } from '../lib/data/bundle';
   import { getAllBestScores, getMeta } from '../lib/data/db';
   import { scoreBg, scoreColor } from '../lib/score/color';
-  import { quizScoreKey, reviewScoreKey } from '../lib/data/mode';
+  import { isNativeMode, quizScoreKey, reviewScoreKey } from '../lib/data/mode';
 
   const b = bundle();
   // Progressive curriculum order. Primary key is JLPT level descending so N5
@@ -53,6 +53,16 @@
 
   onMount(async () => {
     bestScores = await getAllBestScores();
+
+    // In native mode, treat every kanji as having at least score 80
+    // so they all show as mastered (green/gold) on the grid.
+    if (await isNativeMode()) {
+      for (const ch of Object.keys(b.kanji)) {
+        if (!bestScores.has(ch)) bestScores.set(ch, 80);
+      }
+      bestScores = new Map(bestScores); // trigger reactivity
+    }
+
     const [qk, rk] = await Promise.all([quizScoreKey(), reviewScoreKey()]);
     const [qs, rs] = await Promise.all([
       getMeta<Record<string, number>>(qk),
