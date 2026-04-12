@@ -247,6 +247,8 @@
     border-radius: 20px;
     border: 1px solid rgba(255, 122, 89, 0.25);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+    /* Fixed height prevents layout shift when toggling glyph ↔ RevealKanji */
+    min-height: 6.5rem;
   }
   .kanji-glyph {
     font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;

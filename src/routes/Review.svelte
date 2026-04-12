@@ -2,7 +2,7 @@
   import { link } from 'svelte-spa-router';
   import { onMount } from 'svelte';
   import { bundle } from '../lib/data/bundle';
-  import { dueSrs, putSrs, getSrs, getAllBestScores } from '../lib/data/db';
+  import { dueSrs, putSrs, getSrs, getAllBestScores, getMeta, putMeta } from '../lib/data/db';
   import { grade, newCard } from '../lib/srs/sm2';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { KNOWN_THRESHOLD } from '../lib/data/known';
@@ -14,6 +14,7 @@
   let idx = $state(0);
   let showBack = $state(false);
   let done = $state(false);
+  let reviewResults = $state<Map<string, {correct: number, total: number}>>(new Map());
 
   /** Read the JLPT filter from Home's sessionStorage. 'all' or a number 0-5. */
   function getJlptFilter(): number | null {
@@ -55,19 +56,20 @@
     // Top up with new cards for kanji/words the user has already mastered
     // (score >= 80) but hasn't been quizzed on via SRS yet.
     if (due.length < NEW_PER_SESSION) {
+      const native = await getMeta<boolean>('native-mode');
       const scores = await getAllBestScores();
       const need = NEW_PER_SESSION - due.length;
       const newCandidates: SrsState[] = [];
       for (const k of Object.values(b.kanji)) {
         if (newCandidates.length >= need) break;
-        if ((scores.get(k.char) ?? 0) < KNOWN_THRESHOLD) continue;
+        if (!native && (scores.get(k.char) ?? 0) < KNOWN_THRESHOLD) continue;
         if (jlptFilter !== null && k.jlpt !== jlptFilter) continue;
         const id = `kanji:${k.char}`;
         if (!(await getSrs(id))) newCandidates.push(newCard(id, 'kanji', now));
       }
       for (const w of Object.values(b.words)) {
         if (newCandidates.length >= need) break;
-        if (w.kanji.length > 0 && !w.kanji.every((c) => (scores.get(c) ?? 0) >= KNOWN_THRESHOLD)) continue;
+        if (!native && w.kanji.length > 0 && !w.kanji.every((c) => (scores.get(c) ?? 0) >= KNOWN_THRESHOLD)) continue;
         if (jlptFilter !== null && !w.kanji.some((ch) => b.kanji[ch]?.jlpt === jlptFilter)) continue;
         const id = `word:${w.id}`;
         if (!(await getSrs(id))) newCandidates.push(newCard(id, 'word', now));
@@ -155,11 +157,25 @@
     const g: Grade = isCorrect ? 'good' : 'again';
     const next = grade(current, g);
     await putSrs(next);
+
+    // Track per-kanji review result
+    const ch = current.kind === 'kanji'
+      ? current.id.replace('kanji:', '')
+      : current.id.replace('word:', '').charAt(0);
+    const prev = reviewResults.get(ch) ?? { correct: 0, total: 0 };
+    reviewResults.set(ch, { correct: prev.correct + (isCorrect ? 1 : 0), total: prev.total + 1 });
   }
 
-  function advance() {
+  async function advance() {
     if (idx + 1 >= queue.length) {
       done = true;
+      // Save per-kanji review percentages (keep best)
+      const existing = (await getMeta<Record<string, number>>('review-scores')) ?? {};
+      for (const [ch, r] of reviewResults) {
+        const pct = Math.round((r.correct / r.total) * 100);
+        existing[ch] = Math.max(existing[ch] ?? 0, pct);
+      }
+      await putMeta('review-scores', existing);
     } else {
       idx += 1;
       showBack = false;

@@ -1,4 +1,4 @@
-import { getAllBestScores } from './db';
+import { getAllBestScores, getMeta } from './db';
 import type { Segment } from './types';
 
 /** A kanji is "known" / "practiced" once its best morph score reaches this
@@ -16,9 +16,17 @@ function isKanjiChar(ch: string): boolean {
 
 /** Returns the set of kanji the user has practiced to the mastery threshold. */
 export async function loadKnownKanji(): Promise<Set<string>> {
-  const map = await getAllBestScores();
+  // Native mode: treat ALL kanji as known.
+  const native = await getMeta<boolean>('native-mode');
+  if (native) {
+    const { bundle } = await import('./bundle');
+    const b = bundle();
+    return new Set(Object.keys(b.kanji));
+  }
+  // Normal mode: only kanji with score >= threshold.
+  const scores = await getAllBestScores();
   const out = new Set<string>();
-  for (const [char, score] of map) {
+  for (const [char, score] of scores) {
     if (score >= KNOWN_THRESHOLD) out.add(char);
   }
   return out;

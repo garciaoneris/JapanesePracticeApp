@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { link } from 'svelte-spa-router';
   import { bundle } from '../lib/data/bundle';
-  import { getAllBestScores } from '../lib/data/db';
+  import { getAllBestScores, getMeta } from '../lib/data/db';
   import { scoreBg, scoreColor } from '../lib/score/color';
 
   const b = bundle();
@@ -41,6 +41,8 @@
   // Map of kanji char → best score (0-100). Loaded once on mount — svelte-spa-router
   // re-mounts Home on every navigation back, so this is always fresh.
   let bestScores = $state<Map<string, number>>(new Map());
+  let quizScores = $state<Map<string, number>>(new Map());
+  let reviewScores = $state<Map<string, number>>(new Map());
   // "Mastered" = the known-kanji threshold used by filtering and the Vocabulary
   // tab (>= 80). "Gold" = the new reward tier (>= 85).
   let masteredCount = $derived(
@@ -50,6 +52,12 @@
 
   onMount(async () => {
     bestScores = await getAllBestScores();
+    const [qs, rs] = await Promise.all([
+      getMeta<Record<string, number>>('quiz-scores'),
+      getMeta<Record<string, number>>('review-scores'),
+    ]);
+    if (qs) quizScores = new Map(Object.entries(qs));
+    if (rs) reviewScores = new Map(Object.entries(rs));
   });
 
   function cellStyle(char: string): string {
@@ -88,6 +96,25 @@
       if (c) return c;
     }
     return '';
+  }
+
+  function badgeTier(char: string): 'none' | 'green' | 'gold' | 'red' | 'shiny-gold' | 'shiny-platinum' {
+    const stroke = bestScores.get(char) ?? 0;
+    const quiz = quizScores.get(char) ?? -1;   // -1 = never quizzed
+    const review = reviewScores.get(char) ?? -1;
+
+    if (stroke < 80) return 'none';
+
+    // Check for review mistakes (review score > 0 but < 100)
+    if (review >= 0 && review < 100) return 'red';
+
+    const perfectQuiz = quiz === 100;
+    const perfectReview = review === 100;
+
+    if (perfectQuiz && perfectReview) return 'shiny-platinum';
+    if (perfectQuiz || perfectReview) return 'shiny-gold';
+    if (stroke >= 85) return 'gold';
+    return 'green';
   }
 </script>
 
@@ -136,7 +163,11 @@
     {#each filtered as k (k.char)}
       <a
         class="cell"
-        class:mastered={(bestScores.get(k.char) ?? -1) >= 85}
+        class:green={badgeTier(k.char) === 'green'}
+        class:gold={badgeTier(k.char) === 'gold'}
+        class:red={badgeTier(k.char) === 'red'}
+        class:shiny-gold={badgeTier(k.char) === 'shiny-gold'}
+        class:shiny-platinum={badgeTier(k.char) === 'shiny-platinum'}
         href={`/learn/${encodeURIComponent(k.char)}`}
         use:link
         aria-label={k.meanings.join(', ')}
@@ -300,8 +331,32 @@
   .cell:active {
     transform: scale(0.94);
   }
-  .cell.mastered {
+  .cell.green {
+    border-color: var(--ok);
+    background: rgba(94, 202, 124, 0.1);
+  }
+  .cell.gold {
     box-shadow: 0 0 0 2px rgba(255, 210, 74, 0.4), 0 8px 22px rgba(255, 210, 74, 0.2);
+  }
+  .cell.red {
+    border-color: var(--err);
+    background: rgba(255, 107, 107, 0.1);
+  }
+  .cell.shiny-gold {
+    border-color: #ffd24a;
+    animation: shimmer-gold 2s ease-in-out infinite;
+  }
+  .cell.shiny-platinum {
+    border-color: #e5e4e2;
+    animation: shimmer-plat 2s ease-in-out infinite;
+  }
+  @keyframes shimmer-gold {
+    0%, 100% { box-shadow: 0 0 0 2px #ffd24a, 0 0 8px rgba(255,210,74,0.3); }
+    50% { box-shadow: 0 0 0 2px #ffd24a, 0 0 18px rgba(255,210,74,0.6); }
+  }
+  @keyframes shimmer-plat {
+    0%, 100% { box-shadow: 0 0 0 2px #e5e4e2, 0 0 8px rgba(229,228,226,0.3); }
+    50% { box-shadow: 0 0 0 2px #e5e4e2, 0 0 18px rgba(229,228,226,0.6); }
   }
   .ch { font-size: 1.9rem; line-height: 1; }
   .lvl {

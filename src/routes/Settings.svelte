@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { link } from 'svelte-spa-router';
-  import { getToken, setToken, clearToken, syncNow, getLastSync } from '../lib/data/sync';
+  import { getToken, setToken, clearToken, syncNow, getLastSync, schedulePush } from '../lib/data/sync';
+  import { getMeta, putMeta } from '../lib/data/db';
 
   let token = $state<string | null>(null);
   let tokenInput = $state('');
   let syncing = $state(false);
   let syncResult = $state<{ ok: boolean; error?: string } | null>(null);
   let lastSync = $state<number | null>(null);
+  let nativeMode = $state(false);
 
   function maskToken(t: string): string {
     if (t.length <= 8) return '****';
@@ -29,7 +31,15 @@
     syncResult = null;
   }
 
-  onMount(refreshState);
+  onMount(async () => {
+    await refreshState();
+    nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
+  });
+
+  async function handleNativeToggle() {
+    await putMeta('native-mode', nativeMode);
+    schedulePush();
+  }
 
   async function handleSave() {
     const trimmed = tokenInput.trim();
@@ -71,6 +81,17 @@
 
 <div class="container">
   <h1 class="title">Settings</h1>
+
+  <section class="card">
+    <h2 class="section-title">Display Mode</h2>
+    <label class="toggle-field">
+      <input type="checkbox" bind:checked={nativeMode} onchange={handleNativeToggle} />
+      Native mode 🌻
+    </label>
+    <p class="desc toggle-desc">
+      Treat all kanji as mastered. Unlocks all vocabulary and review content.
+    </p>
+  </section>
 
   <section class="card">
     <h2 class="section-title">Gist Sync</h2>
@@ -158,6 +179,7 @@
     border: 1px solid var(--border);
     border-radius: 16px;
     padding: 1.25rem;
+    margin-bottom: 1rem;
   }
 
   .section-title {
@@ -305,5 +327,25 @@
 
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  .toggle-field {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    cursor: pointer;
+    font-size: 1rem;
+  }
+
+  .toggle-field input[type="checkbox"] {
+    width: 1.25rem;
+    height: 1.25rem;
+    accent-color: var(--accent);
+  }
+
+  .toggle-desc {
+    margin-top: 0.5rem;
+    color: var(--fg-dim);
+    font-size: 0.85rem;
   }
 </style>

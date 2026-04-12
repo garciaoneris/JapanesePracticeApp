@@ -14,9 +14,13 @@ export interface SyncPayload {
   scores: Record<string, number>;
   srs: SrsState[];
   attempts: Array<Omit<Attempt, 'id'>>;
-  /** Per-kanji vocabulary quiz best scores (0–100%). Added after initial
+  /** Per-kanji vocabulary quiz best scores (0-100%). Added after initial
    *  release so older payloads may not have this field. */
   quizScores?: Record<string, number>;
+  /** Per-kanji SRS review best scores (0-100%). */
+  reviewScores?: Record<string, number>;
+  /** Whether native mode is enabled (all kanji treated as mastered). */
+  nativeMode?: boolean;
 }
 
 // ── Token management ─────────────────────────────────────────────────────
@@ -134,7 +138,13 @@ export async function collectLocal(): Promise<SyncPayload> {
   // Quiz scores (vocabulary quiz best % per kanji)
   const quizScores = (await getMeta<Record<string, number>>('quiz-scores')) ?? {};
 
-  return { v: 1, ts: Date.now(), scores, srs, attempts, quizScores };
+  // Review scores (SRS review best % per kanji)
+  const reviewScores = (await getMeta<Record<string, number>>('review-scores')) ?? {};
+
+  // Native mode flag
+  const nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
+
+  return { v: 1, ts: Date.now(), scores, srs, attempts, quizScores, reviewScores, nativeMode };
 }
 
 // ── Push ─────────────────────────────────────────────────────────────────
@@ -224,6 +234,31 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
     }
     if (quizModified) {
       await putMeta('quiz-scores', local);
+      modified = true;
+    }
+  }
+
+  // ---- Merge review scores (max wins) ----
+  if (remote.reviewScores) {
+    const local = (await getMeta<Record<string, number>>('review-scores')) ?? {};
+    let revModified = false;
+    for (const [char, remoteScore] of Object.entries(remote.reviewScores)) {
+      if (remoteScore > (local[char] ?? 0)) {
+        local[char] = remoteScore;
+        revModified = true;
+      }
+    }
+    if (revModified) {
+      await putMeta('review-scores', local);
+      modified = true;
+    }
+  }
+
+  // ---- Merge native mode flag ----
+  if (remote.nativeMode !== undefined) {
+    const localNative = (await getMeta<boolean>('native-mode')) ?? false;
+    if (remote.nativeMode && !localNative) {
+      await putMeta('native-mode', true);
       modified = true;
     }
   }
