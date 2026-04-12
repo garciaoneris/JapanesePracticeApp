@@ -366,6 +366,8 @@
   .cell.shiny-platinum {
     border-color: #e5e4e2;
     box-shadow: 0 0 0 1.5px #e5e4e2, 0 0 12px rgba(229, 228, 226, 0.3);
+    background: linear-gradient(135deg, rgba(229, 228, 226, 0.15), rgba(200, 200, 210, 0.08));
+    color: #e5e4e2;
   }
   /* Sparkle dots rising upward. --s1d/--s2d (delay) and --s1x/--s2x
      (horizontal %) are computed per cell from the kanji codepoint in
