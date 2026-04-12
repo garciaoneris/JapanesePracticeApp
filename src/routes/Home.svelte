@@ -73,10 +73,10 @@
   });
 
   function cellStyle(char: string): string {
-    // Shiny tiers use CSS class styling — skip inline colors so they don't
-    // override the silver border/background on platinum cells.
+    // Gold/shiny tiers use CSS class styling — skip inline colors so they
+    // don't override the border/background set by the class.
     const tier = badgeTier(char);
-    if (tier === 'shiny-gold' || tier === 'shiny-platinum') return '';
+    if (tier === 'gold-edge' || tier === 'shiny-gold' || tier === 'shiny-platinum') return '';
     const s = bestScores.get(char);
     if (s === undefined) return '';
     const border = scoreColor(s);
@@ -85,9 +85,9 @@
   }
 
   function badgeStyle(char: string): string {
-    // Shiny tiers get their badge styled entirely via CSS (gold glow / silver glow).
+    // Gold/shiny tiers get their badge styled entirely via CSS.
     const tier = badgeTier(char);
-    if (tier === 'shiny-gold' || tier === 'shiny-platinum') return '';
+    if (tier === 'gold-edge' || tier === 'shiny-gold' || tier === 'shiny-platinum') return '';
     const s = bestScores.get(char);
     if (s === undefined) return '';
     const c = scoreColor(s);
@@ -117,7 +117,7 @@
     return '';
   }
 
-  function badgeTier(char: string): 'none' | 'green' | 'gold' | 'red' | 'shiny-gold' | 'shiny-platinum' {
+  function badgeTier(char: string): 'none' | 'green' | 'gold-edge' | 'red' | 'shiny-gold' | 'shiny-platinum' {
     const stroke = bestScores.get(char) ?? 0;
     const quiz = quizScores.get(char) ?? -1;   // -1 = never quizzed
     const review = reviewScores.get(char) ?? -1;
@@ -130,9 +130,12 @@
     const perfectQuiz = quiz === 100;
     const perfectReview = review === 100;
 
-    if (perfectQuiz && perfectReview) return 'shiny-platinum';
-    if (perfectQuiz || perfectReview) return 'shiny-gold';
-    if (stroke >= 85) return 'gold';
+    // Platinum: perfect in practice (≥85) + vocab quiz + review
+    if (stroke >= 85 && perfectQuiz && perfectReview) return 'shiny-platinum';
+    // Gold with fill + glow: practice ≥85 AND perfect in vocab OR review
+    if (stroke >= 85 && (perfectQuiz || perfectReview)) return 'shiny-gold';
+    // Gold edge only: practice ≥85 but no perfect quiz/review yet
+    if (stroke >= 85) return 'gold-edge';
     return 'green';
   }
 </script>
@@ -183,7 +186,7 @@
       <a
         class="cell"
         class:green={badgeTier(k.char) === 'green'}
-        class:gold={badgeTier(k.char) === 'gold'}
+        class:gold-edge={badgeTier(k.char) === 'gold-edge'}
         class:red={badgeTier(k.char) === 'red'}
         class:shiny-gold={badgeTier(k.char) === 'shiny-gold'}
         class:shiny-platinum={badgeTier(k.char) === 'shiny-platinum'}
@@ -354,17 +357,21 @@
     border-color: var(--ok);
     background: rgba(94, 202, 124, 0.1);
   }
-  .cell.gold {
-    box-shadow: 0 0 0 2px rgba(255, 210, 74, 0.4), 0 8px 22px rgba(255, 210, 74, 0.2);
+  .cell.gold-edge {
+    border-color: #ffd24a;
   }
   .cell.red {
     border-color: var(--err);
     background: rgba(255, 107, 107, 0.1);
   }
-  /* ── Shiny cells: static glow on score badge, no animations ───────── */
+  .cell.gold-edge > .score-badge {
+    color: #ffd24a;
+    border-color: #ffd24a;
+  }
+  /* ── Shiny cells: fill + glow on score badge ─────────────────────── */
   .cell.shiny-gold {
     border-color: #ffd24a;
-    box-shadow: 0 0 0 1.5px rgba(255, 210, 74, 0.4);
+    background: rgba(255, 210, 74, 0.1) !important;
   }
   .cell.shiny-platinum {
     border-color: #e5e4e2;
