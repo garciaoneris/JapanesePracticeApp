@@ -4,7 +4,7 @@
   import { bundle } from '../lib/data/bundle';
   import { loadKnownKanji } from '../lib/data/known';
   import { getAllBestScores, getMeta, putMeta } from '../lib/data/db';
-  import { quizScoreKey } from '../lib/data/mode';
+  import { isNativeMode, quizScoreKey } from '../lib/data/mode';
   import type { Kanji, Word } from '../lib/data/types';
 
   // ── Helpers ──────────────────────────────────────────────────────────
@@ -60,6 +60,13 @@
     ]);
     knownKanji = known;
     bestScores = scores;
+    // Native mode: fill in score 80 for all kanji so they appear in the grid.
+    if (await isNativeMode()) {
+      for (const ch of Object.keys(b.kanji)) {
+        if (!bestScores.has(ch)) bestScores.set(ch, 80);
+      }
+      bestScores = new Map(bestScores);
+    }
     if (qs) quizScores = new Map(Object.entries(qs));
 
     // If navigating back from a word detail page, re-open the kanji's words view.
