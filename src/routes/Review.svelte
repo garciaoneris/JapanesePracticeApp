@@ -48,17 +48,28 @@
     jlptFilter = getJlptFilter();
 
     let due = await dueSrs(now, 200);
+    const native = (await getMeta<boolean>('native-mode')) === true;
+    const scores = await getAllBestScores();
 
-    // Filter due cards by JLPT level if a filter is active.
-    if (jlptFilter !== null) {
-      due = due.filter((c) => cardMatchesFilter(c, b, jlptFilter!));
-    }
+    // Filter due cards: only show kanji the user has actually mastered
+    // (or all kanji in native mode). Also filter by JLPT level if active.
+    due = due.filter((c) => {
+      if (jlptFilter !== null && !cardMatchesFilter(c, b, jlptFilter)) return false;
+      if (native) return true;
+      // Check mastery for this card's kanji
+      if (c.kind === 'kanji') {
+        const ch = c.id.slice('kanji:'.length);
+        return (scores.get(ch) ?? 0) >= KNOWN_THRESHOLD;
+      }
+      const wid = c.id.slice('word:'.length);
+      const w = b.words[wid];
+      if (!w) return false;
+      return w.kanji.length === 0 || w.kanji.every((ch) => (scores.get(ch) ?? 0) >= KNOWN_THRESHOLD);
+    });
 
     // Top up with new cards for kanji/words the user has already mastered
     // (score >= 80) but hasn't been quizzed on via SRS yet.
     if (due.length < NEW_PER_SESSION) {
-      const native = (await getMeta<boolean>('native-mode')) === true;
-      const scores = await getAllBestScores();
       const need = NEW_PER_SESSION - due.length;
       const newCandidates: SrsState[] = [];
       for (const k of Object.values(b.kanji)) {
