@@ -20,7 +20,14 @@
   color-scheme: dark;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+  /* This is a practice app, not a reading app — disable text selection
+     everywhere to prevent iOS from triggering selection handles when
+     the user holds a stroke or long-presses any UI element. */
+  -webkit-user-select: none;
+  user-select: none;
+}
 
 html, body, #app {
   margin: 0;
