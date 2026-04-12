@@ -252,7 +252,14 @@
   }
   .kanji-glyph {
     font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
-    font-size: clamp(4.5rem, 18vw, 7.5rem);
+    /* Match RevealKanji's exact dimensions so no layout shift on step change */
+    width: clamp(5rem, 18vw, 8rem);
+    height: clamp(5rem, 18vw, 8rem);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: clamp(3rem, 12vw, 5rem);
     line-height: 1;
     color: var(--fg);
     text-shadow: 0 4px 24px rgba(255, 122, 89, 0.35);
