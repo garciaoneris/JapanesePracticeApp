@@ -357,60 +357,27 @@
     border-color: #e5e4e2;
     box-shadow: 0 0 0 1.5px #e5e4e2, 0 0 12px rgba(229, 228, 226, 0.3);
   }
-  /* Diagonal light sweep across the cell */
+  /* Three sparkle dots rising from random-ish positions.
+     Each uses a different duration + delay so cells don't sync up. */
   .cell.shiny-gold::before,
-  .cell.shiny-platinum::before {
-    content: '';
-    position: absolute;
-    inset: -50%;
-    background: conic-gradient(
-      from 0deg,
-      transparent 0deg,
-      transparent 340deg,
-      rgba(255, 255, 255, 0.25) 345deg,
-      rgba(255, 255, 255, 0.45) 350deg,
-      rgba(255, 255, 255, 0.25) 355deg,
-      transparent 360deg
-    );
-    animation: sparkle-rotate 3s linear infinite;
-    pointer-events: none;
-  }
-  .cell.shiny-platinum::before {
-    background: conic-gradient(
-      from 0deg,
-      transparent 0deg,
-      transparent 335deg,
-      rgba(229, 228, 226, 0.3) 340deg,
-      rgba(255, 255, 255, 0.5) 350deg,
-      rgba(229, 228, 226, 0.3) 355deg,
-      transparent 360deg
-    );
-  }
-  /* Small sparkle dot that floats around */
   .cell.shiny-gold::after,
+  .cell.shiny-platinum::before,
   .cell.shiny-platinum::after {
     content: '✦';
     position: absolute;
-    font-size: 0.5rem;
-    color: #ffd24a;
-    opacity: 0;
+    font-size: 0.45rem;
     pointer-events: none;
-    animation: sparkle-dot 2.5s ease-in-out infinite;
+    opacity: 0;
   }
-  .cell.shiny-platinum::after {
-    color: #f0efe8;
-    animation-delay: 0.4s;
-  }
-  @keyframes sparkle-rotate {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
-  }
-  @keyframes sparkle-dot {
-    0%   { opacity: 0; top: 70%; left: 20%; transform: scale(0.5); }
-    20%  { opacity: 1; transform: scale(1.2); }
-    50%  { opacity: 0.8; top: 20%; left: 60%; transform: scale(1); }
-    80%  { opacity: 1; top: 30%; left: 80%; transform: scale(1.3); }
-    100% { opacity: 0; top: 10%; left: 30%; transform: scale(0.5); }
+  .cell.shiny-gold::before   { color: #ffd24a; left: 25%; animation: sparkle-rise 2.2s ease-out infinite; }
+  .cell.shiny-gold::after    { color: #ffe88a; left: 65%; animation: sparkle-rise 2.8s ease-out 0.9s infinite; }
+  .cell.shiny-platinum::before { color: #e5e4e2; left: 30%; animation: sparkle-rise 2.4s ease-out 0.3s infinite; }
+  .cell.shiny-platinum::after  { color: #f8f8ff; left: 70%; animation: sparkle-rise 2.6s ease-out 1.1s infinite; }
+  @keyframes sparkle-rise {
+    0%   { bottom: 10%; opacity: 0; transform: scale(0.5); }
+    15%  { opacity: 1; transform: scale(1.2); }
+    60%  { opacity: 0.7; transform: scale(1); }
+    100% { bottom: 95%; opacity: 0; transform: scale(0.4); }
   }
   .ch { font-size: 1.9rem; line-height: 1; }
   .lvl {
