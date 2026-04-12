@@ -14,11 +14,14 @@ export interface SyncPayload {
   scores: Record<string, number>;
   srs: SrsState[];
   attempts: Array<Omit<Attempt, 'id'>>;
-  /** Per-kanji vocabulary quiz best scores (0-100%). Added after initial
-   *  release so older payloads may not have this field. */
+  /** Per-kanji vocabulary quiz best scores (0-100%). */
   quizScores?: Record<string, number>;
   /** Per-kanji SRS review best scores (0-100%). */
   reviewScores?: Record<string, number>;
+  /** Native-mode quiz scores (separate from regular). */
+  nativeQuizScores?: Record<string, number>;
+  /** Native-mode review scores (separate from regular). */
+  nativeReviewScores?: Record<string, number>;
   /** Whether native mode is enabled (all kanji treated as mastered). */
   nativeMode?: boolean;
 }
@@ -135,16 +138,21 @@ export async function collectLocal(): Promise<SyncPayload> {
     attCursor = await attCursor.continue();
   }
 
-  // Quiz scores (vocabulary quiz best % per kanji)
+  // Quiz scores — regular + native mode (stored separately)
   const quizScores = (await getMeta<Record<string, number>>('quiz-scores')) ?? {};
+  const nativeQuizScores = (await getMeta<Record<string, number>>('native-quiz-scores')) ?? {};
 
-  // Review scores (SRS review best % per kanji)
+  // Review scores — regular + native mode (stored separately)
   const reviewScores = (await getMeta<Record<string, number>>('review-scores')) ?? {};
+  const nativeReviewScores = (await getMeta<Record<string, number>>('native-review-scores')) ?? {};
 
   // Native mode flag
   const nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
 
-  return { v: 1, ts: Date.now(), scores, srs, attempts, quizScores, reviewScores, nativeMode };
+  return {
+    v: 1, ts: Date.now(), scores, srs, attempts,
+    quizScores, reviewScores, nativeQuizScores, nativeReviewScores, nativeMode,
+  };
 }
 
 // ── Push ─────────────────────────────────────────────────────────────────
@@ -252,6 +260,32 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
       await putMeta('review-scores', local);
       modified = true;
     }
+  }
+
+  // ---- Merge native quiz scores (max wins) ----
+  if (remote.nativeQuizScores) {
+    const local = (await getMeta<Record<string, number>>('native-quiz-scores')) ?? {};
+    let nqModified = false;
+    for (const [char, remoteScore] of Object.entries(remote.nativeQuizScores)) {
+      if (remoteScore > (local[char] ?? 0)) {
+        local[char] = remoteScore;
+        nqModified = true;
+      }
+    }
+    if (nqModified) { await putMeta('native-quiz-scores', local); modified = true; }
+  }
+
+  // ---- Merge native review scores (max wins) ----
+  if (remote.nativeReviewScores) {
+    const local = (await getMeta<Record<string, number>>('native-review-scores')) ?? {};
+    let nrModified = false;
+    for (const [char, remoteScore] of Object.entries(remote.nativeReviewScores)) {
+      if (remoteScore > (local[char] ?? 0)) {
+        local[char] = remoteScore;
+        nrModified = true;
+      }
+    }
+    if (nrModified) { await putMeta('native-review-scores', local); modified = true; }
   }
 
   // ---- Merge native mode flag ----

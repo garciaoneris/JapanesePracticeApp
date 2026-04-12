@@ -4,6 +4,7 @@
   import { bundle } from '../lib/data/bundle';
   import { loadKnownKanji } from '../lib/data/known';
   import { getAllBestScores, getMeta, putMeta } from '../lib/data/db';
+  import { quizScoreKey } from '../lib/data/mode';
   import type { Kanji, Word } from '../lib/data/types';
 
   // ── Helpers ──────────────────────────────────────────────────────────
@@ -48,11 +49,14 @@
    *  meta store as 'quiz-scores' — a separate scale from stroke-drawing. */
   let quizScores = $state<Map<string, number>>(new Map());
 
+  let _qsKey = '';  // resolved quiz-score meta key for this mode
+
   onMount(async () => {
+    _qsKey = await quizScoreKey();
     const [known, scores, qs] = await Promise.all([
       loadKnownKanji(),
       getAllBestScores(),
-      getMeta<Record<string, number>>('quiz-scores'),
+      getMeta<Record<string, number>>(_qsKey),
     ]);
     knownKanji = known;
     bestScores = scores;
@@ -213,7 +217,7 @@
         quizScores.set(selectedKanji, best);
         quizScores = new Map(quizScores); // trigger reactivity
         // Persist all quiz scores to IndexedDB.
-        putMeta('quiz-scores', Object.fromEntries(quizScores)).catch(() => {});
+        putMeta(_qsKey || 'quiz-scores', Object.fromEntries(quizScores)).catch(() => {});
       }
     } else {
       quizIdx++;

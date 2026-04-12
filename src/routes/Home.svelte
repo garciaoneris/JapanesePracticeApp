@@ -4,6 +4,7 @@
   import { bundle } from '../lib/data/bundle';
   import { getAllBestScores, getMeta } from '../lib/data/db';
   import { scoreBg, scoreColor } from '../lib/score/color';
+  import { quizScoreKey, reviewScoreKey } from '../lib/data/mode';
 
   const b = bundle();
   // Progressive curriculum order. Primary key is JLPT level descending so N5
@@ -52,9 +53,10 @@
 
   onMount(async () => {
     bestScores = await getAllBestScores();
+    const [qk, rk] = await Promise.all([quizScoreKey(), reviewScoreKey()]);
     const [qs, rs] = await Promise.all([
-      getMeta<Record<string, number>>('quiz-scores'),
-      getMeta<Record<string, number>>('review-scores'),
+      getMeta<Record<string, number>>(qk),
+      getMeta<Record<string, number>>(rk),
     ]);
     if (qs) quizScores = new Map(Object.entries(qs));
     if (rs) reviewScores = new Map(Object.entries(rs));

@@ -6,6 +6,7 @@
   import { grade, newCard } from '../lib/srs/sm2';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { KNOWN_THRESHOLD } from '../lib/data/known';
+  import { reviewScoreKey } from '../lib/data/mode';
   import type { Grade, SrsState } from '../lib/data/types';
 
   const NEW_PER_SESSION = 10;
@@ -170,12 +171,13 @@
     if (idx + 1 >= queue.length) {
       done = true;
       // Save per-kanji review percentages (keep best)
-      const existing = (await getMeta<Record<string, number>>('review-scores')) ?? {};
+      const rsKey = await reviewScoreKey();
+      const existing = (await getMeta<Record<string, number>>(rsKey)) ?? {};
       for (const [ch, r] of reviewResults) {
         const pct = Math.round((r.correct / r.total) * 100);
         existing[ch] = Math.max(existing[ch] ?? 0, pct);
       }
-      await putMeta('review-scores', existing);
+      await putMeta(rsKey, existing);
     } else {
       idx += 1;
       showBack = false;

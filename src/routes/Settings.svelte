@@ -3,6 +3,7 @@
   import { link } from 'svelte-spa-router';
   import { getToken, setToken, clearToken, syncNow, getLastSync, schedulePush } from '../lib/data/sync';
   import { getMeta, putMeta } from '../lib/data/db';
+  import { setNativeModeCache } from '../lib/data/mode';
 
   let token = $state<string | null>(null);
   let tokenInput = $state('');
@@ -38,7 +39,10 @@
 
   async function handleNativeToggle() {
     await putMeta('native-mode', nativeMode);
+    setNativeModeCache(nativeMode);
     schedulePush();
+    // Force Home to re-mount with the new mode by navigating.
+    window.location.hash = '#/';
   }
 
   async function handleSave() {
