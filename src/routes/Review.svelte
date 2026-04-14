@@ -8,6 +8,7 @@
   import { KNOWN_THRESHOLD } from '../lib/data/known';
   import { reviewScoreKey } from '../lib/data/mode';
   import type { Grade, SrsState } from '../lib/data/types';
+  import { recordMistake } from '../lib/data/mistakes';
 
   const NEW_PER_SESSION = 10;
 
@@ -180,6 +181,17 @@
       : current.id.replace('word:', '').charAt(0);
     const prev = reviewResults.get(ch) ?? { correct: 0, total: 0 };
     reviewResults.set(ch, { correct: prev.correct + (isCorrect ? 1 : 0), total: prev.total + 1 });
+
+    // Record wrong answers as open mistakes for Reinforce mode.
+    if (!isCorrect) {
+      if (current.kind === 'kanji') {
+        const kch = current.id.replace('kanji:', '');
+        recordMistake({ type: 'kanji-meaning', id: kch }).catch(() => {});
+      } else {
+        const wid = current.id.replace('word:', '');
+        recordMistake({ type: 'word-meaning', id: wid }).catch(() => {});
+      }
+    }
 
     // Speak the reading aloud after answering.
     if (display) {

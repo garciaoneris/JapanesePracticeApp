@@ -6,6 +6,7 @@
   import { getAllBestScores, getMeta, putMeta } from '../lib/data/db';
   import { isNativeMode, quizScoreKey } from '../lib/data/mode';
   import type { Kanji, Word } from '../lib/data/types';
+  import { recordMistake } from '../lib/data/mistakes';
 
   // ── Helpers ──────────────────────────────────────────────────────────
   function toHira(s: string): string {
@@ -210,7 +211,17 @@
   function pickAnswer(idx: number): void {
     if (quizPicked !== null) return;
     quizPicked = idx;
-    if (idx === currentQuestion.correctIdx) quizCorrectCount++;
+    if (idx === currentQuestion.correctIdx) {
+      quizCorrectCount++;
+    } else {
+      // Record this as an open mistake for the Reinforce mode.
+      const type = currentQuestion.type === 'reading' ? 'word-reading' : 'word-meaning';
+      recordMistake({ type, id: currentQuestion.word.id }).catch(() => {});
+    }
+  }
+
+  function restartQuiz(): void {
+    startQuiz();
   }
 
   function nextQuestion(): void {
@@ -408,6 +419,10 @@
     </div>
   {:else if currentQuestion}
     <div class="quiz-container">
+      <div class="quiz-toolbar">
+        <button class="quiz-nav-btn" onclick={backToWords}>← Back</button>
+        <button class="quiz-nav-btn" onclick={restartQuiz}>↻ Restart</button>
+      </div>
       <div class="quiz-progress">
         Question {quizIdx + 1} of {quizQuestions.length}
       </div>
@@ -712,6 +727,25 @@
     color: var(--fg-dim);
     margin-bottom: 1.5rem;
     font-variant-numeric: tabular-nums;
+  }
+  .quiz-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    padding: 0.5rem 1rem 0;
+  }
+  .quiz-nav-btn {
+    padding: 0.5rem 0.9rem;
+    font-size: 0.85rem;
+    color: var(--fg-dim);
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .quiz-nav-btn:hover {
+    color: var(--fg);
+    border-color: var(--fg-dim);
   }
   .quiz-prompt {
     text-align: center;

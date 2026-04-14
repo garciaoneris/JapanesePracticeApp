@@ -5,6 +5,7 @@
   import Vocab from './routes/Vocab.svelte';
   import Vocabulary from './routes/Vocabulary.svelte';
   import Review from './routes/Review.svelte';
+  import Reinforce from './routes/Reinforce.svelte';
   import Settings from './routes/Settings.svelte';
   import NotFound from './routes/NotFound.svelte';
   import { onMount } from 'svelte';
@@ -18,6 +19,7 @@
     '/vocab/:id': Vocab,
     '/review': Review,
     '/settings': Settings,
+    '/reinforce': Reinforce,
     '*': NotFound,
   };
 

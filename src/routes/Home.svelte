@@ -5,6 +5,7 @@
   import { getAllBestScores, getMeta } from '../lib/data/db';
   import { scoreBg, scoreColor } from '../lib/score/color';
   import { isNativeMode, quizScoreKey, reviewScoreKey } from '../lib/data/mode';
+  import { getMistakeCount } from '../lib/data/mistakes';
 
   const b = bundle();
   // Progressive curriculum order. Primary key is JLPT level descending so N5
@@ -57,6 +58,7 @@
   let bestScores = $state<Map<string, number>>(new Map());
   let quizScores = $state<Map<string, number>>(new Map());
   let reviewScores = $state<Map<string, number>>(new Map());
+  let mistakeCount = $state(0);
   // "Mastered" = the known-kanji threshold used by filtering and the Vocabulary
   // tab (>= 80). "Gold" = the new reward tier (>= 85).
   let masteredCount = $derived(
@@ -83,6 +85,8 @@
     ]);
     if (qs) quizScores = new Map(Object.entries(qs));
     if (rs) reviewScores = new Map(Object.entries(rs));
+
+    mistakeCount = await getMistakeCount();
   });
 
   function cellStyle(char: string): string {
@@ -176,6 +180,12 @@
         <span class="cta-icon">📘</span>
         <span>Vocabulary</span>
       </a>
+      {#if mistakeCount > 0}
+        <a class="cta reinforce" href="/reinforce" use:link>
+          <span class="cta-icon">💪</span>
+          <span>Reinforce ({mistakeCount})</span>
+        </a>
+      {/if}
     </div>
   </div>
 </header>
@@ -297,6 +307,11 @@
     background: linear-gradient(135deg, var(--indigo), #5a3cf0);
     color: #fff;
     box-shadow: 0 10px 28px rgba(124, 92, 255, 0.4);
+  }
+  .cta.reinforce {
+    background: linear-gradient(135deg, #ff6b6b, #c94444);
+    color: #fff;
+    box-shadow: 0 10px 28px rgba(255, 107, 107, 0.4);
   }
   .cta:active {
     transform: scale(0.97);

@@ -1,5 +1,6 @@
 import { db, getMeta, putMeta, deleteMeta, getAllBestScores } from './db';
 import type { SrsState, Attempt } from './types';
+import type { Mistake } from './mistakes';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -24,6 +25,10 @@ export interface SyncPayload {
   nativeReviewScores?: Record<string, number>;
   /** Whether native mode is enabled (all kanji treated as mastered). */
   nativeMode?: boolean;
+  /** Open mistakes the user hasn't yet reinforced to clearance (regular mode). */
+  mistakes?: Mistake[];
+  /** Open mistakes in native mode (tracked separately). */
+  nativeMistakes?: Mistake[];
 }
 
 // ── Token management ─────────────────────────────────────────────────────
@@ -149,9 +154,14 @@ export async function collectLocal(): Promise<SyncPayload> {
   // Native mode flag
   const nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
 
+  // Open mistakes — regular + native (tracked separately, same as scores)
+  const mistakes = (await getMeta<Mistake[]>('mistakes')) ?? [];
+  const nativeMistakes = (await getMeta<Mistake[]>('native-mistakes')) ?? [];
+
   return {
     v: 1, ts: Date.now(), scores, srs, attempts,
     quizScores, reviewScores, nativeQuizScores, nativeReviewScores, nativeMode,
+    mistakes, nativeMistakes,
   };
 }
 
@@ -297,7 +307,52 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
     }
   }
 
+  // ---- Merge open mistakes (regular + native, keyed by type+id) ----
+  if (remote.mistakes) {
+    if (await mergeMistakes('mistakes', remote.mistakes)) modified = true;
+  }
+  if (remote.nativeMistakes) {
+    if (await mergeMistakes('native-mistakes', remote.nativeMistakes)) modified = true;
+  }
+
   return modified;
+}
+
+/** Merge a remote mistakes list into the local one at the given meta key.
+ *  Strategy: union by `${type}:${id}`. For conflicts, take max of
+ *  count/streak/lastSeen (more progress wins). New remote entries are
+ *  imported. Returns true if the local list was modified. */
+async function mergeMistakes(key: string, remote: Mistake[]): Promise<boolean> {
+  const local = (await getMeta<Mistake[]>(key)) ?? [];
+  const index = new Map<string, Mistake>();
+  for (const m of local) index.set(`${m.type}:${m.id}`, m);
+  let changed = false;
+  for (const rm of remote) {
+    const k = `${rm.type}:${rm.id}`;
+    const lm = index.get(k);
+    if (!lm) {
+      index.set(k, { ...rm });
+      changed = true;
+    } else {
+      const merged: Mistake = {
+        type: rm.type,
+        id: rm.id,
+        count: Math.max(lm.count, rm.count),
+        streak: Math.max(lm.streak, rm.streak),
+        lastSeen: Math.max(lm.lastSeen, rm.lastSeen),
+      };
+      if (
+        merged.count !== lm.count ||
+        merged.streak !== lm.streak ||
+        merged.lastSeen !== lm.lastSeen
+      ) {
+        index.set(k, merged);
+        changed = true;
+      }
+    }
+  }
+  if (changed) await putMeta(key, [...index.values()]);
+  return changed;
 }
 
 // ── Orchestration ────────────────────────────────────────────────────────
