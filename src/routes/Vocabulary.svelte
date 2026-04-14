@@ -317,11 +317,14 @@
   <a class="back" href="/" use:link>← Home</a>
   {#if mode === 'words'}
     <button class="back back-btn" onclick={backToGrid}>← Vocabulary</button>
-  {:else if mode === 'quiz' && !quizFinished}
-    <button class="back back-btn" onclick={backToWords}>← Back</button>
-    <button class="back back-btn" onclick={restartQuiz}>↻ Restart</button>
-  {:else if mode === 'quiz' && quizFinished}
-    <button class="back back-btn" onclick={backToWords}>← Back to words</button>
+  {:else if mode === 'quiz'}
+    <button class="back back-btn" onclick={backToGrid}>← Vocabulary</button>
+    {#if selectedKanji}
+      <button class="back back-btn" onclick={backToWords}>← {selectedKanji}</button>
+    {/if}
+    {#if !quizFinished}
+      <button class="back back-btn" onclick={restartQuiz}>↻ Restart</button>
+    {/if}
   {/if}
 </div>
 
