@@ -313,7 +313,17 @@
   }
 </script>
 
-<a class="back" href="/" use:link>← Home</a>
+<div class="nav-links">
+  <a class="back" href="/" use:link>← Home</a>
+  {#if mode === 'words'}
+    <button class="back back-btn" onclick={backToGrid}>← Vocabulary</button>
+  {:else if mode === 'quiz' && !quizFinished}
+    <button class="back back-btn" onclick={backToWords}>← Back</button>
+    <button class="back back-btn" onclick={restartQuiz}>↻ Restart</button>
+  {:else if mode === 'quiz' && quizFinished}
+    <button class="back back-btn" onclick={backToWords}>← Back to words</button>
+  {/if}
+</div>
 
 {#if mode === 'grid'}
   <!-- ── GRID MODE ──────────────────────────────────────────────────── -->
@@ -356,8 +366,6 @@
 
 {:else if mode === 'words'}
   <!-- ── WORDS MODE ─────────────────────────────────────────────────── -->
-  <button class="back-btn" onclick={backToGrid}>← Back to vocabulary</button>
-
   {#if selectedKanjiData}
     <header class="words-header">
       <div class="words-kanji-big">{selectedKanjiData.char}</div>
@@ -419,10 +427,6 @@
     </div>
   {:else if currentQuestion}
     <div class="quiz-container">
-      <div class="quiz-toolbar">
-        <button class="quiz-nav-btn" onclick={backToWords}>← Back</button>
-        <button class="quiz-nav-btn" onclick={restartQuiz}>↻ Restart</button>
-      </div>
       <div class="quiz-progress">
         Question {quizIdx + 1} of {quizQuestions.length}
       </div>
@@ -464,6 +468,7 @@
 
 <style>
   /* ── Shared ─────────────────────────────────────────────────────────── */
+  .nav-links { display: flex; gap: 0.25rem; flex-wrap: wrap; }
   .back {
     display: inline-block;
     padding: 0.75rem 1rem;
@@ -727,25 +732,6 @@
     color: var(--fg-dim);
     margin-bottom: 1.5rem;
     font-variant-numeric: tabular-nums;
-  }
-  .quiz-toolbar {
-    display: flex;
-    gap: 0.5rem;
-    justify-content: center;
-    padding: 0.5rem 1rem 0;
-  }
-  .quiz-nav-btn {
-    padding: 0.5rem 0.9rem;
-    font-size: 0.85rem;
-    color: var(--fg-dim);
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    cursor: pointer;
-  }
-  .quiz-nav-btn:hover {
-    color: var(--fg);
-    border-color: var(--fg-dim);
   }
   .quiz-prompt {
     text-align: center;
