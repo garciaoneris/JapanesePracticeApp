@@ -7,6 +7,7 @@
   import { isNativeMode, quizScoreKey } from '../lib/data/mode';
   import type { Kanji, Word } from '../lib/data/types';
   import { recordMistake } from '../lib/data/mistakes';
+  import { speakJa } from '../lib/speech/tts';
 
   // ── Helpers ──────────────────────────────────────────────────────────
   function toHira(s: string): string {
@@ -218,6 +219,8 @@
       const type = currentQuestion.type === 'reading' ? 'word-reading' : 'word-meaning';
       recordMistake({ type, id: currentQuestion.word.id }).catch(() => {});
     }
+    // Speak the word aloud so the user hears the correct pronunciation.
+    speakJa(currentQuestion.word.jp);
   }
 
   function restartQuiz(): void {
