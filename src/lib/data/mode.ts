@@ -30,3 +30,8 @@ export async function quizScoreKey(): Promise<string> {
 export async function reviewScoreKey(): Promise<string> {
   return (await isNativeMode()) ? 'native-review-scores' : 'review-scores';
 }
+
+/** IndexedDB meta key for review-drawing scores (writing practice in Review). */
+export async function reviewDrawScoreKey(): Promise<string> {
+  return (await isNativeMode()) ? 'native-review-draw-scores' : 'review-draw-scores';
+}

@@ -6,9 +6,11 @@
   import { grade, newCard } from '../lib/srs/sm2';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { KNOWN_THRESHOLD } from '../lib/data/known';
-  import { reviewScoreKey } from '../lib/data/mode';
+  import { reviewScoreKey, reviewDrawScoreKey } from '../lib/data/mode';
   import type { Grade, SrsState } from '../lib/data/types';
   import { recordMistake } from '../lib/data/mistakes';
+  import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
+  import RevealKanji from '../lib/ui/RevealKanji.svelte';
 
   const NEW_PER_SESSION = 10;
 
@@ -127,6 +129,18 @@
   let correctChoice = $state('');
   let picked = $state<number | null>(null);
 
+  /** Set when a drawing score arrives. null = not yet drawn. */
+  let drawScoreDone = $state<number | null>(null);
+
+  /** Deterministic coin flip: kanji cards alternate between 'draw' and 'choice' based on a hash of the card id. */
+  function cardDisplayMode(card: SrsState | undefined): 'choice' | 'draw' {
+    if (!card || card.kind !== 'kanji') return 'choice';
+    let h = 0;
+    for (const c of card.id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return h % 2 === 0 ? 'draw' : 'choice';
+  }
+  const cardMode = $derived(cardDisplayMode(current));
+
   function shuffle<T>(arr: T[]): T[] {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -163,7 +177,7 @@
 
   // Build choices whenever the card changes.
   $effect(() => {
-    if (display) buildChoices();
+    if (display && cardMode === 'choice') buildChoices();
   });
 
   async function pickChoice(i: number) {
@@ -204,6 +218,37 @@
     }
   }
 
+  async function onDrawScore(score: number) {
+    if (!current || drawScoreDone !== null) return;
+    drawScoreDone = score;
+    const isCorrect = score >= 70;
+    const g: Grade = isCorrect ? 'good' : 'again';
+    const next = grade(current, g);
+    await putSrs(next);
+
+    // Track per-kanji result for the session summary
+    const ch = current.id.replace('kanji:', '');
+    const prev = reviewResults.get(ch) ?? { correct: 0, total: 0 };
+    reviewResults.set(ch, { correct: prev.correct + (isCorrect ? 1 : 0), total: prev.total + 1 });
+
+    // Save to dedicated meta key (separate from meaning-quiz scores)
+    const rdKey = await reviewDrawScoreKey();
+    const existing = (await getMeta<Record<string, number>>(rdKey)) ?? {};
+    existing[ch] = Math.max(existing[ch] ?? 0, score);
+    await putMeta(rdKey, existing);
+
+    // Wrong answer → becomes a mistake for Reinforce mode
+    if (!isCorrect) {
+      recordMistake({ type: 'kanji-meaning', id: ch }).catch(() => {});
+    }
+
+    // Speak the reading aloud so the user hears what they just drew
+    if (display && display.kind === 'kanji' && display.kanji) {
+      const r = display.kanji.kun[0] ?? display.kanji.on[0] ?? display.kanji.char;
+      speakJa(r);
+    }
+  }
+
   async function advance() {
     if (idx + 1 >= queue.length) {
       done = true;
@@ -219,6 +264,7 @@
       idx += 1;
       showBack = false;
       picked = null;
+      drawScoreDone = null;
     }
   }
 </script>
@@ -236,7 +282,48 @@
   </div>
 {:else if !current || !display}
   <div class="center muted">Loading…</div>
+{:else if cardMode === 'draw' && display.kind === 'kanji' && display.kanji}
+  <!-- ── DRAW MODE: user writes the kanji from memory ───────────────── -->
+  <div class="meta">Card {idx + 1} / {queue.length}</div>
+  <div class="card">
+    <p class="quiz-hint">Draw this kanji:</p>
+    <div class="draw-meaning">{display.kanji.meanings.slice(0, 3).join(', ')}</div>
+  </div>
+
+  <div class="peek-row">
+    {#key current.id + '-peek'}
+      <RevealKanji svg={display.kanji.svg} strokeCount={Math.min(3, display.kanji.strokes)} />
+    {/key}
+    <span class="peek-hint">Tap to peek (max 3 strokes)</span>
+  </div>
+
+  {#key current.id + '-morph'}
+    <PracticeMorph
+      kanji={display.kanji}
+      minimal={true}
+      hideRefOnMount={true}
+      onScore={onDrawScore}
+    />
+  {/key}
+
+  {#if drawScoreDone !== null}
+    <div class="answer-reveal">
+      <div class="reveal-reading">
+        {display.kanji.on.join('、') || '—'} · {display.kanji.kun.map((r) => r.replace(/[.\-]/g, '')).join('、') || '—'}
+      </div>
+      <div class="reveal-meaning">{display.kanji.meanings.join(', ')}</div>
+      <div class="draw-score-line" class:ok={drawScoreDone >= 70} class:bad={drawScoreDone < 70}>
+        Score: {drawScoreDone} / 100 · {drawScoreDone >= 70 ? 'passed ✓' : 'try again ✗'}
+      </div>
+    </div>
+    <div class="actions single">
+      <button class="primary" onclick={advance}>
+        {idx + 1 >= queue.length ? 'Finish' : 'Next →'}
+      </button>
+    </div>
+  {/if}
 {:else}
+  <!-- ── CHOICE MODE: meaning quiz (existing) ───────────────────────── -->
   <div class="meta">Card {idx + 1} / {queue.length}</div>
   <div class="card">
     {#if display.kind === 'kanji' && display.kanji}
@@ -382,4 +469,28 @@
   .actions.single button { min-width: 12rem; }
   .jump { text-align: center; padding: 0.5rem 1rem 2rem; }
   .muted { color: var(--fg-dim); }
+  .draw-meaning {
+    font-size: 1.2rem;
+    color: var(--accent);
+    text-align: center;
+    margin-top: 0.5rem;
+  }
+  .peek-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.5rem 1rem 0;
+  }
+  .peek-hint {
+    color: var(--fg-dim);
+    font-size: 0.8rem;
+  }
+  .draw-score-line {
+    font-size: 1rem;
+    font-variant-numeric: tabular-nums;
+    margin-top: 0.5rem;
+  }
+  .draw-score-line.ok { color: var(--ok); }
+  .draw-score-line.bad { color: var(--err); }
 </style>

@@ -23,6 +23,10 @@ export interface SyncPayload {
   nativeQuizScores?: Record<string, number>;
   /** Native-mode review scores (separate from regular). */
   nativeReviewScores?: Record<string, number>;
+  /** Per-kanji review-drawing best scores (regular mode). */
+  reviewDrawScores?: Record<string, number>;
+  /** Per-kanji review-drawing best scores (native mode). */
+  nativeReviewDrawScores?: Record<string, number>;
   /** Whether native mode is enabled (all kanji treated as mastered). */
   nativeMode?: boolean;
   /** Open mistakes the user hasn't yet reinforced to clearance (regular mode). */
@@ -151,6 +155,10 @@ export async function collectLocal(): Promise<SyncPayload> {
   const reviewScores = (await getMeta<Record<string, number>>('review-scores')) ?? {};
   const nativeReviewScores = (await getMeta<Record<string, number>>('native-review-scores')) ?? {};
 
+  // Review draw scores — regular + native mode
+  const reviewDrawScores = (await getMeta<Record<string, number>>('review-draw-scores')) ?? {};
+  const nativeReviewDrawScores = (await getMeta<Record<string, number>>('native-review-draw-scores')) ?? {};
+
   // Native mode flag
   const nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
 
@@ -162,6 +170,7 @@ export async function collectLocal(): Promise<SyncPayload> {
     v: 1, ts: Date.now(), scores, srs, attempts,
     quizScores, reviewScores, nativeQuizScores, nativeReviewScores, nativeMode,
     mistakes, nativeMistakes,
+    reviewDrawScores, nativeReviewDrawScores,
   };
 }
 
@@ -272,6 +281,19 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
     }
   }
 
+  // ---- Merge review draw scores (max wins) ----
+  if (remote.reviewDrawScores) {
+    const local = (await getMeta<Record<string, number>>('review-draw-scores')) ?? {};
+    let rdModified = false;
+    for (const [char, remoteScore] of Object.entries(remote.reviewDrawScores)) {
+      if (remoteScore > (local[char] ?? 0)) {
+        local[char] = remoteScore;
+        rdModified = true;
+      }
+    }
+    if (rdModified) { await putMeta('review-draw-scores', local); modified = true; }
+  }
+
   // ---- Merge native quiz scores (max wins) ----
   if (remote.nativeQuizScores) {
     const local = (await getMeta<Record<string, number>>('native-quiz-scores')) ?? {};
@@ -296,6 +318,19 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
       }
     }
     if (nrModified) { await putMeta('native-review-scores', local); modified = true; }
+  }
+
+  // ---- Merge native review draw scores (max wins) ----
+  if (remote.nativeReviewDrawScores) {
+    const local = (await getMeta<Record<string, number>>('native-review-draw-scores')) ?? {};
+    let nrdModified = false;
+    for (const [char, remoteScore] of Object.entries(remote.nativeReviewDrawScores)) {
+      if (remoteScore > (local[char] ?? 0)) {
+        local[char] = remoteScore;
+        nrdModified = true;
+      }
+    }
+    if (nrdModified) { await putMeta('native-review-draw-scores', local); modified = true; }
   }
 
   // ---- Merge native mode flag ----

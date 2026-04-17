@@ -240,11 +240,7 @@
     color: var(--fg-dim);
     opacity: 0.6;
     text-decoration: none;
-    transition: opacity 0.15s;
     z-index: 1;
-  }
-  .settings-gear:hover {
-    opacity: 1;
   }
   .hero-inner {
     text-align: center;
@@ -301,7 +297,6 @@
     color: #1b1b1f;
     background: linear-gradient(135deg, var(--accent), #ff5a30);
     box-shadow: 0 10px 28px rgba(255, 122, 89, 0.4);
-    transition: transform 0.1s;
   }
   .cta.secondary {
     background: linear-gradient(135deg, var(--indigo), #5a3cf0);
@@ -312,9 +307,6 @@
     background: linear-gradient(135deg, #ff6b6b, #c94444);
     color: #fff;
     box-shadow: 0 10px 28px rgba(255, 107, 107, 0.4);
-  }
-  .cta:active {
-    transform: scale(0.97);
   }
   .cta-icon {
     font-size: 0.95em;
@@ -372,13 +364,6 @@
     border-radius: 14px;
     color: var(--fg);
     font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
-    transition: transform 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.2s;
-  }
-  .cell:hover {
-    background: var(--bg-elevated);
-  }
-  .cell:active {
-    transform: scale(0.94);
   }
   .cell.green {
     border-color: var(--ok);
@@ -411,13 +396,13 @@
     background: rgba(255, 210, 74, 0.25);
     border-color: #ffd24a;
     color: #ffd24a;
-    box-shadow: 0 0 8px rgba(255, 210, 74, 0.6), 0 0 3px rgba(255, 210, 74, 0.4);
+    box-shadow: 0 0 6px rgba(255, 210, 74, 0.55);
   }
   .cell.shiny-platinum > .score-badge {
     background: rgba(229, 228, 226, 0.25);
     border-color: #e5e4e2;
     color: #e5e4e2;
-    box-shadow: 0 0 8px rgba(229, 228, 226, 0.6), 0 0 3px rgba(229, 228, 226, 0.4);
+    box-shadow: 0 0 6px rgba(229, 228, 226, 0.55);
   }
   .ch { font-size: 1.9rem; line-height: 1; }
   .lvl {

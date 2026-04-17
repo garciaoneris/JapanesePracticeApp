@@ -14,8 +14,14 @@
     knownKanji?: ReadonlySet<string>;
     /** Callback: fired when the reference animation visibility changes. */
     onRefChange?: (visible: boolean) => void;
+    /** Called after a morph completes with the score (0-100). */
+    onScore?: (score: number) => void;
+    /** Hide callout card + history strip (Review draw mode). */
+    minimal?: boolean;
+    /** Don't auto-play the reference animation on mount (draw from memory). */
+    hideRefOnMount?: boolean;
   }
-  const { kanji, callouts = [], knownKanji, onRefChange }: Props = $props();
+  const { kanji, callouts = [], knownKanji, onRefChange, onScore, minimal = false, hideRefOnMount = false }: Props = $props();
 
   let refVisible = $state(true);
 
@@ -374,6 +380,9 @@
       ts: Date.now(),
     }).catch(() => {});
 
+    // Notify parent (Review draw mode uses this to grade the SRS card).
+    onScore?.(s);
+
     // Pick a random callout from the filtered set and (optionally) speak it.
     const callout = pickRandomCallout();
     currentCallout = callout;
@@ -479,7 +488,7 @@
       svgEl.setAttribute('height', '100%');
       svgEl.style.position = 'absolute';
       svgEl.style.inset = '0';
-      svgEl.style.opacity = '1';  // visible initially — animation plays
+      svgEl.style.opacity = hideRefOnMount ? '0' : '1';
       svgEl.style.pointerEvents = 'none';
       svgEl.style.transition = 'opacity 0.2s';
       refPaths = Array.from(svgEl.querySelectorAll('path'));
@@ -491,8 +500,13 @@
     canvas.height = size;
     host.style.width = host.style.height = `${size}px`;
 
-    // Auto-play the reference animation on mount.
-    playAnimation();
+    if (hideRefOnMount) {
+      // Review draw mode: draw from memory, no reference animation.
+      refVisible = false;
+      onRefChange?.(false);
+    } else {
+      playAnimation();
+    }
 
     return () => clearAnim();
   });
@@ -521,7 +535,7 @@
 
 <!-- Score + history strip. Visible whenever there's *any* signal to show:
      a brand-new score this session, or a history strip hydrated from IDB. -->
-{#if score !== null || history.length > 0}
+{#if !minimal && (score !== null || history.length > 0)}
   <div class="score-row">
     {#if score !== null}
       <div class="score-big {tone(score)}">
@@ -554,7 +568,7 @@
 {/if}
 
 <!-- Random callout that appeared during the morph -->
-{#if currentCallout}
+{#if !minimal && currentCallout}
   <button class="callout-card" onclick={tapCallout} aria-label="Replay callout audio">
     <div class="tag-label">Example <span class="hint-tap">tap to replay 🔊</span></div>
     <div class="tag-jp">
