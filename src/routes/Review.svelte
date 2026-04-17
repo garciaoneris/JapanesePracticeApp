@@ -285,16 +285,17 @@
 {:else if cardMode === 'draw' && display.kind === 'kanji' && display.kanji}
   <!-- ── DRAW MODE: user writes the kanji from memory ───────────────── -->
   <div class="meta">Card {idx + 1} / {queue.length}</div>
-  <div class="card">
-    <p class="quiz-hint">Draw this kanji:</p>
-    <div class="draw-meaning">{display.kanji.meanings.slice(0, 3).join(', ')}</div>
-  </div>
-
-  <div class="peek-row">
-    {#key current.id + '-peek'}
-      <RevealKanji svg={display.kanji.svg} strokeCount={Math.min(3, display.kanji.strokes)} />
-    {/key}
-    <span class="peek-hint">Tap to peek (max 3 strokes)</span>
+  <div class="draw-header">
+    <div class="draw-prompt">
+      <p class="quiz-hint">Draw this kanji:</p>
+      <div class="draw-meaning">{display.kanji.meanings.slice(0, 3).join(', ')}</div>
+    </div>
+    <div class="peek-col">
+      {#key current.id + '-peek'}
+        <RevealKanji svg={display.kanji.svg} strokeCount={Math.min(3, display.kanji.strokes)} />
+      {/key}
+      <span class="peek-hint">max 3 peeks</span>
+    </div>
   </div>
 
   {#key current.id + '-morph'}
@@ -469,22 +470,33 @@
   .actions.single button { min-width: 12rem; }
   .jump { text-align: center; padding: 0.5rem 1rem 2rem; }
   .muted { color: var(--fg-dim); }
-  .draw-meaning {
-    font-size: 1.2rem;
-    color: var(--accent);
-    text-align: center;
-    margin-top: 0.5rem;
-  }
-  .peek-row {
+  /* Horizontal layout for the draw prompt + peek hint to save vertical space */
+  .draw-header {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 1rem;
-    padding: 0.5rem 1rem 0;
+    padding: 0.75rem 1rem;
+    max-width: 560px;
+    margin: 0 auto;
+  }
+  .draw-prompt { flex: 1; min-width: 0; text-align: center; }
+  .draw-meaning {
+    font-size: 1.15rem;
+    color: var(--accent);
+    margin-top: 0.25rem;
+  }
+  .peek-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
   }
   .peek-hint {
     color: var(--fg-dim);
-    font-size: 0.8rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.03em;
   }
   .draw-score-line {
     font-size: 1rem;
