@@ -588,7 +588,12 @@
 {/if}
 
 <div class="row">
-  <button onclick={() => { reset(true); playAnimation(); }} disabled={animating}>↻ Replay</button>
+  <!-- In hideRefOnMount mode (Review / Reinforce draw), Replay is hidden
+       until the user has attempted at least one full morph — prevents
+       peeking at the reference animation before drawing. -->
+  {#if !hideRefOnMount || morphed}
+    <button onclick={() => { reset(true); playAnimation(); }} disabled={animating}>↻ Replay</button>
+  {/if}
   <button onclick={() => { reset(true); hideRef(); }} disabled={drawnCount === 0 && !morphed && !refVisible}>
     ⌫ Erase
   </button>

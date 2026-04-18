@@ -8,7 +8,7 @@
 import { getMeta, putMeta } from './db';
 import { isNativeMode } from './mode';
 
-export type MistakeType = 'word-reading' | 'word-meaning' | 'kanji-meaning';
+export type MistakeType = 'word-reading' | 'word-meaning' | 'kanji-meaning' | 'kanji-writing';
 
 export interface Mistake {
   /** What kind of question was missed */

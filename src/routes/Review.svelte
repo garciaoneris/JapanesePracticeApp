@@ -237,9 +237,10 @@
     existing[ch] = Math.max(existing[ch] ?? 0, score);
     await putMeta(rdKey, existing);
 
-    // Wrong answer → becomes a mistake for Reinforce mode
+    // Wrong draw → recorded as a WRITING mistake so Reinforce asks
+    // the user to draw it again (not just pick its meaning).
     if (!isCorrect) {
-      recordMistake({ type: 'kanji-meaning', id: ch }).catch(() => {});
+      recordMistake({ type: 'kanji-writing', id: ch }).catch(() => {});
     }
 
     // Speak the reading aloud so the user hears what they just drew

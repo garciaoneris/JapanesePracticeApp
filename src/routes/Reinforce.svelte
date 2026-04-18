@@ -4,21 +4,37 @@
   import { bundle } from '../lib/data/bundle';
   import { speakJa } from '../lib/speech/tts';
   import { getMistakes, reinforceCorrect, reinforceWrong, type Mistake } from '../lib/data/mistakes';
+  import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
+  import RevealKanji from '../lib/ui/RevealKanji.svelte';
+  import type { Kanji } from '../lib/data/types';
 
-  type Question = {
+  /** Choice-based question (word-reading, word-meaning, kanji-meaning). */
+  type ChoiceQuestion = {
     mistake: Mistake;
-    prompt: string;        // shown as the question (kanji or kanji+reading)
-    subPrompt?: string;    // e.g. the reading for meaning questions
-    instruction: string;   // "What is the reading?" / "What does this mean?"
+    kind: 'choice';
+    prompt: string;
+    subPrompt?: string;
+    instruction: string;
     choices: string[];
     correct: string;
-    speakText: string;     // what to speak aloud after answering
+    speakText: string;
   };
+
+  /** Draw-from-memory question (kanji-writing). */
+  type DrawQuestion = {
+    mistake: Mistake;
+    kind: 'draw';
+    kanji: Kanji;
+    speakText: string;
+  };
+
+  type Question = ChoiceQuestion | DrawQuestion;
 
   let mistakes = $state<Mistake[]>([]);
   let questions = $state<Question[]>([]);
   let idx = $state(0);
   let picked = $state<number | null>(null);
+  let drawScoreDone = $state<number | null>(null);
   let done = $state(false);
   let cleared = $state(0);
   let reinforcedCount = $state(0);
@@ -36,6 +52,16 @@
 
   /** Build a Question from a Mistake. Returns null if data missing. */
   function buildQuestion(m: Mistake): Question | null {
+    if (m.type === 'kanji-writing') {
+      const k = b.kanji[m.id];
+      if (!k) return null;
+      return {
+        mistake: m,
+        kind: 'draw',
+        kanji: k,
+        speakText: k.kun[0] ?? k.on[0] ?? k.char,
+      };
+    }
     if (m.type === 'kanji-meaning') {
       const k = b.kanji[m.id];
       if (!k) return null;
@@ -49,6 +75,7 @@
       const choices = shuffle([correct, ...distractors]);
       return {
         mistake: m,
+        kind: 'choice',
         prompt: k.char,
         instruction: 'What does this mean?',
         choices,
@@ -69,6 +96,7 @@
       const choices = shuffle([correct, ...distractors]);
       return {
         mistake: m,
+        kind: 'choice',
         prompt: w.jp,
         instruction: 'What is the reading?',
         choices,
@@ -88,6 +116,7 @@
     const choices = shuffle([correct, ...distractors]);
     return {
       mistake: m,
+      kind: 'choice',
       prompt: w.jp,
       subPrompt: w.reading,
       instruction: 'What does this mean?',
@@ -107,6 +136,7 @@
     questions = qs;
     idx = 0;
     picked = null;
+    drawScoreDone = null;
     done = questions.length === 0;
     cleared = 0;
     reinforcedCount = 0;
@@ -116,12 +146,9 @@
 
   const current = $derived(questions[idx]);
 
-  async function pickChoice(i: number) {
-    if (picked !== null || !current) return;
-    picked = i;
-    const isCorrect = current.choices[i] === current.correct;
+  async function recordOutcome(isCorrect: boolean) {
+    if (!current) return;
     if (isCorrect) {
-      // Check if this would clear the mistake (streak would reach REINFORCE_CLEAR_STREAK)
       const before = current.mistake.streak;
       await reinforceCorrect(current.mistake.type, current.mistake.id);
       if (before + 1 >= 3) cleared++;
@@ -129,8 +156,20 @@
     } else {
       await reinforceWrong(current.mistake.type, current.mistake.id);
     }
-    // Speak the reading / word aloud
     speakJa(current.speakText);
+  }
+
+  async function pickChoice(i: number) {
+    if (picked !== null || !current || current.kind !== 'choice') return;
+    picked = i;
+    const isCorrect = current.choices[i] === current.correct;
+    await recordOutcome(isCorrect);
+  }
+
+  async function onDrawScore(score: number) {
+    if (!current || current.kind !== 'draw' || drawScoreDone !== null) return;
+    drawScoreDone = score;
+    await recordOutcome(score >= 70);
   }
 
   function advance() {
@@ -139,6 +178,7 @@
     } else {
       idx += 1;
       picked = null;
+      drawScoreDone = null;
     }
   }
 </script>
@@ -162,10 +202,53 @@
   </div>
 {:else if !current}
   <div class="center muted">Loading…</div>
-{:else}
+{:else if current.kind === 'draw'}
+  <!-- ── Writing practice mistake ─────────────────────────────────── -->
   <div class="meta">
-    Mistake {idx + 1} / {questions.length}
-    · streak {current.mistake.streak}/3
+    Mistake {idx + 1} / {questions.length} · streak {current.mistake.streak}/3
+  </div>
+  <div class="draw-header">
+    <div class="draw-prompt">
+      <p class="quiz-hint">Draw this kanji:</p>
+      <div class="draw-meaning">{current.kanji.meanings.slice(0, 3).join(', ')}</div>
+    </div>
+    <div class="peek-col">
+      {#key current.mistake.id + '-peek'}
+        <RevealKanji svg={current.kanji.svg} strokeCount={Math.min(3, current.kanji.strokes)} />
+      {/key}
+      <span class="peek-hint">max 3 peeks</span>
+    </div>
+  </div>
+
+  {#key current.mistake.id + '-morph'}
+    <PracticeMorph
+      kanji={current.kanji}
+      minimal={true}
+      hideRefOnMount={true}
+      onScore={onDrawScore}
+    />
+  {/key}
+
+  {#if drawScoreDone !== null}
+    <div class="answer-reveal">
+      <div class="reveal-reading">
+        {current.kanji.on.join('、') || '—'} · {current.kanji.kun.map((r) => r.replace(/[.\-]/g, '')).join('、') || '—'}
+      </div>
+      <div class="reveal-meaning">{current.kanji.meanings.join(', ')}</div>
+      <div class="draw-score-line" class:ok={drawScoreDone >= 70} class:bad={drawScoreDone < 70}>
+        Score: {drawScoreDone} / 100 · {drawScoreDone >= 70 ? 'passed ✓' : 'try again ✗'}
+      </div>
+    </div>
+    <div class="actions single">
+      <button class="primary" onclick={advance}>
+        {idx + 1 >= questions.length ? 'Finish' : 'Next →'}
+      </button>
+    </div>
+  {/if}
+{:else}
+  <!-- ── Choice-based mistake ─────────────────────────────────────── -->
+  <div class="meta">
+    Mistake {idx + 1} / {questions.length} · streak {current.mistake.streak}/3
   </div>
   <div class="card">
     <div class="big-prompt">{current.prompt}</div>
@@ -260,4 +343,54 @@
   .actions.single button { min-width: 12rem; padding: 0.8rem 1.5rem; border-radius: 10px; border: 1px solid var(--border); background: var(--accent); color: #1b1b1f; font-weight: 600; cursor: pointer; }
   .muted { color: var(--fg-dim); }
   .primary { padding: 0.6rem 1.2rem; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: #1b1b1f; font-weight: 600; cursor: pointer; }
+
+  /* Draw-mode styles (mirror Review.svelte) */
+  .draw-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    max-width: 560px;
+    margin: 0 auto;
+  }
+  .draw-prompt { flex: 1; min-width: 0; text-align: center; }
+  .draw-meaning {
+    font-size: 1.15rem;
+    color: var(--accent);
+    margin-top: 0.25rem;
+  }
+  .peek-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
+  }
+  .peek-hint {
+    color: var(--fg-dim);
+    font-size: 0.7rem;
+    letter-spacing: 0.03em;
+  }
+  .answer-reveal {
+    text-align: center;
+    padding: 0.75rem 1rem 0;
+  }
+  .reveal-reading {
+    font-size: 1.2rem;
+    color: var(--accent);
+    font-family: 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
+  }
+  .reveal-meaning {
+    font-size: 0.95rem;
+    color: var(--fg);
+    margin-top: 0.25rem;
+  }
+  .draw-score-line {
+    font-size: 1rem;
+    font-variant-numeric: tabular-nums;
+    margin-top: 0.5rem;
+  }
+  .draw-score-line.ok { color: var(--ok); }
+  .draw-score-line.bad { color: var(--err); }
 </style>
