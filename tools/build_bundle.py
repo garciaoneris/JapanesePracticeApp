@@ -655,7 +655,27 @@ def attach_tatoeba(
     _timed("tatoeba_segment", t0)
 
 
-def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
+def _load_llm_cache(path: Path) -> dict[str, dict[str, object]]:
+    """Read the LLM-generated word example cache. One JSON object per line,
+    keyed by word id. Returns an empty dict if the cache doesn't exist yet."""
+    if not path.exists():
+        return {}
+    out: dict[str, dict[str, object]] = {}
+    with path.open("rb") as f:
+        for raw in f:
+            if not raw.strip():
+                continue
+            try:
+                row = orjson.loads(raw)
+            except orjson.JSONDecodeError:
+                continue
+            wid = str(row.get("id", ""))
+            if wid:
+                out[wid] = row
+    return out
+
+
+def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = False) -> None:
     kanjidic_path = data_dir / "kanjidic2.xml"
     kanjivg_path = next(data_dir.glob("kanjivg-*.xml"), None) or data_dir / "kanjivg.xml"
     jmdict_path = data_dir / "JMdict_e"
@@ -736,17 +756,48 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     )
     t_build0 = _timed("build_word_indexes", t_build0)
 
-    attach_tatoeba(
-        words,
-        jpn_sent_path,
-        eng_sent_path,
-        links_path,
-        word_by_jp,
-        kanji_meanings,
-        kanji_jlpt={ch: k.jlpt for ch, k in kanji.items()},
-        include_word_ids=include_word_ids,
-    )
-    t_build0 = time.perf_counter()  # attach_tatoeba prints its own sub-phases
+    if use_llm:
+        # LLM path: read the pre-generated cache produced by tools/run_llm.py.
+        # Every eligible word gets at most one sentence; words missing from the
+        # cache fall through with an empty examples list (frontend hides the
+        # example tab gracefully for those).
+        llm_cache_path = data_dir / "llm_word_cache.jsonl"
+        llm_cache = _load_llm_cache(llm_cache_path)
+        print(
+            f"  LLM cache: {len(llm_cache)} entries at {llm_cache_path}"
+        )
+        attached = 0
+        for w in words.values():
+            entry = llm_cache.get(w.id)
+            if entry is None:
+                continue
+            sentence_en = str(entry.get("sentence_en", ""))
+            segs = entry.get("segs", [])
+            if not isinstance(segs, list) or not segs:
+                continue
+            # Strip optional keys that are null so the bundle matches the
+            # existing compact shape (same as fugashi pipeline output).
+            clean_segs = [
+                {k: v for k, v in s.items() if v is not None and v != ""}
+                for s in segs
+                if isinstance(s, dict)
+            ]
+            w.examples = [{"en": sentence_en, "segs": clean_segs}]
+            attached += 1
+        print(f"  attached {attached} LLM examples to {len(words)} words")
+        t_build0 = _timed("llm_cache_load", t_build0)
+    else:
+        attach_tatoeba(
+            words,
+            jpn_sent_path,
+            eng_sent_path,
+            links_path,
+            word_by_jp,
+            kanji_meanings,
+            kanji_jlpt={ch: k.jlpt for ch, k in kanji.items()},
+            include_word_ids=include_word_ids,
+        )
+        t_build0 = time.perf_counter()  # attach_tatoeba prints its own sub-phases
 
     # Back-link words to kanji.
     for w in words.values():
@@ -813,7 +864,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool) -> None:
     # curriculum expansion from ~284 to ~2900 kanji means every cached
     # client needs to refetch.
     bundle_obj: dict[str, object] = {
-        "version": "7",
+        "version": "8",
         "kanji": {
             ch: {
                 "char": k.char,
@@ -871,8 +922,15 @@ def main() -> None:
     ap.add_argument("--data-dir", type=Path, default=Path("tools/_data"))
     ap.add_argument("--out", type=Path, default=Path("public/data/bundle.json"))
     ap.add_argument("--validate", action="store_true")
+    ap.add_argument(
+        "--use-llm",
+        action="store_true",
+        help="Read per-word examples from llm_word_cache.jsonl (produced by "
+        "tools/run_llm.py) instead of segmenting Tatoeba with fugashi. Skips "
+        "the entire Tatoeba + UniDic pipeline.",
+    )
     args = ap.parse_args()
-    build(args.data_dir, args.out, validate=args.validate)
+    build(args.data_dir, args.out, validate=args.validate, use_llm=args.use_llm)
 
 
 if __name__ == "__main__":
