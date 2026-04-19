@@ -4,6 +4,7 @@
   import { getToken, setToken, clearToken, syncNow, getLastSync, schedulePush } from '../lib/data/sync';
   import { getMeta, putMeta } from '../lib/data/db';
   import { setNativeModeCache } from '../lib/data/mode';
+  import type { ClearedMistake, Mistake } from '../lib/data/mistakes';
 
   let token = $state<string | null>(null);
   let tokenInput = $state('');
@@ -30,6 +31,55 @@
     token = await getToken();
     lastSync = await getLastSync();
     syncResult = null;
+    await refreshMistakeCounts();
+  }
+
+  // ── Mistake list management ──────────────────────────────────────────
+  let regularMistakeCount = $state(0);
+  let nativeMistakeCount = $state(0);
+  let clearingMistakes = $state(false);
+  let clearMistakesResult = $state<string | null>(null);
+
+  async function refreshMistakeCounts() {
+    regularMistakeCount = ((await getMeta<Mistake[]>('mistakes')) ?? []).length;
+    nativeMistakeCount = ((await getMeta<Mistake[]>('native-mistakes')) ?? []).length;
+  }
+
+  /** Clear every open mistake across BOTH mode lists AND write tombstones
+   *  so they don't resurrect from a stale gist push on another device.
+   *  Also triggers a sync push so the empty state propagates immediately. */
+  async function handleClearAllMistakes() {
+    if (clearingMistakes) return;
+    if (!confirm('Clear every open mistake on this device (regular + native)? This does NOT affect your scores or SRS state.')) return;
+    clearingMistakes = true;
+    clearMistakesResult = null;
+    try {
+      const now = Date.now();
+      for (const [listKey, tombKey] of [
+        ['mistakes', 'mistakes-cleared'] as const,
+        ['native-mistakes', 'native-mistakes-cleared'] as const,
+      ]) {
+        const active = (await getMeta<Mistake[]>(listKey)) ?? [];
+        if (active.length === 0) continue;
+        // Upsert tombstones: one per (type, id), clearedAt = now.
+        const existing = (await getMeta<ClearedMistake[]>(tombKey)) ?? [];
+        const byKey = new Map<string, ClearedMistake>();
+        for (const c of existing) byKey.set(`${c.type}:${c.id}`, c);
+        for (const m of active) {
+          byKey.set(`${m.type}:${m.id}`, { type: m.type, id: m.id, clearedAt: now });
+        }
+        await putMeta(tombKey, [...byKey.values()]);
+        await putMeta(listKey, []);
+      }
+      await refreshMistakeCounts();
+      // Trigger a gist push so the cleared state + tombstones propagate now.
+      schedulePush();
+      clearMistakesResult = 'All mistakes cleared. Sync scheduled.';
+    } catch (e) {
+      clearMistakesResult = `Failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      clearingMistakes = false;
+    }
   }
 
   onMount(async () => {
@@ -155,6 +205,36 @@
         Save token
       </button>
     {/if}
+  </section>
+
+  <section class="card">
+    <h2 class="section-title">Reinforce</h2>
+    <div class="field">
+      <span class="field-label">Open mistakes</span>
+      <span class="field-value">
+        {regularMistakeCount} regular
+        {#if nativeMistakeCount > 0} · {nativeMistakeCount} native{/if}
+      </span>
+    </div>
+    <p class="desc">
+      Wipes every open mistake on this device and writes tombstones so they
+      don't return via sync. Scores, SRS state, and drawing history stay
+      intact.
+    </p>
+    {#if clearMistakesResult}
+      <div class="result" class:ok={!clearMistakesResult.startsWith('Failed')} class:fail={clearMistakesResult.startsWith('Failed')}>
+        {clearMistakesResult}
+      </div>
+    {/if}
+    <div class="btn-row">
+      <button
+        class="danger"
+        onclick={handleClearAllMistakes}
+        disabled={clearingMistakes || (regularMistakeCount === 0 && nativeMistakeCount === 0)}
+      >
+        {clearingMistakes ? 'Clearing…' : 'Clear all mistakes'}
+      </button>
+    </div>
   </section>
 </div>
 
