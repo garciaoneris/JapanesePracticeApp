@@ -429,19 +429,48 @@ POS_KEEP_PREFIXES = ("n", "v", "adj", "adv", "exp", "prt", "int", "conj", "pn")
 # common foreign loanwords).
 COMMON_PRIO_TAGS = {"ichi1", "ichi2", "news1", "news2", "gai1"}
 
-# JMdict also tags each common word with `nfXX` where XX is a frequency
-# RANK bucket (nf01 = top 500, nf02 = 500-1000, ..., nf48 = 23500-24000).
-# Lower = more frequent. Filtering on this is the single strongest signal
-# for "is this word a learner actually encounters?" — stronger than misc
-# tags (usually empty) or priority tiers (overlap too much).
-#
-# nf22 ≈ top 11,000 words by combined news + lemma frequency. Empirically:
-#   教会 nf05  泥棒 nf15  口座 nf05      — core everyday, kept
-#   子女 nf23  異邦人 nf34  感興 nf46    — dated / formal / literary, dropped
-#   気丈 nf33  所期 nf33  攻め立てる nf46 — same, dropped
-# A few residual "news-frequent but niche" words slip through (創価学会 nf09,
-# 落語家 nf17) — no filter catches those without also cutting common words.
-NF_FREQUENCY_CUTOFF = 22
+# Path to the LLM-generated A/B/C/D/E register labels (see
+# tools/classify_words.py + tools/_aggregate_labels.py). When present, words
+# labeled D (dated/literary) or E (niche/proper-noun) are dropped from the
+# bundle. This replaced the older `NF_FREQUENCY_CUTOFF` heuristic: nf was
+# roughly correlated with register but also dropped common words that
+# happened to have moderate frequency, and kept news-frequent niche words
+# (創価学会, 文部省, 落語家). The LLM-label filter is a cleaner signal.
+# Falls back to a no-op filter if the labels file is missing.
+WORD_LABELS_PATH = Path("tools/_data/word_labels.jsonl")
+LABELS_TO_DROP: set[str] = {"D", "E"}
+
+# Manual blocklist for specific JMdict ids whose LLM label disagrees with
+# the register you'd want to teach. Sonnet has ~85-90% agreement with
+# strict native-register judgment; the remaining ~10-15% is borderline
+# formal-vs-literary calls. These are the overrides we've accumulated.
+MANUAL_DROP_IDS: set[str] = {
+    "1307970",  # 子女 しじょ "sons and daughters" — formal/dated; Sonnet said C, but modern speakers use 子供
+    "1222320",  # 気丈 きじょう "stout-hearted" — literary; Sonnet said A, but not used in casual speech
+    "1444550",  # 杜撰 ずさん "sloppy" — literary kango; Sonnet said A, but modern speakers use いい加減
+}
+
+
+def _load_word_labels() -> dict[str, str]:
+    """Load the {word_id: register_label} map produced by the LLM classifier
+    sub-agents. Returns an empty dict if the file doesn't exist (filter
+    becomes a no-op)."""
+    if not WORD_LABELS_PATH.exists():
+        return {}
+    labels: dict[str, str] = {}
+    with WORD_LABELS_PATH.open("rb") as f:
+        for raw in f:
+            if not raw.strip():
+                continue
+            try:
+                row = orjson.loads(raw)
+            except orjson.JSONDecodeError:
+                continue
+            wid = str(row.get("id", ""))
+            label = str(row.get("label", "")).upper()
+            if wid and label in {"A", "B", "C", "D", "E"}:
+                labels[wid] = label
+    return labels
 
 
 def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str]) -> dict[str, WordOut]:
@@ -449,6 +478,13 @@ def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str])
     parser = etree.XMLParser(resolve_entities=True, huge_tree=True)
     tree = etree.parse(str(path), parser)
     out: dict[str, WordOut] = {}
+
+    # LLM register labels (A/B/C keep, D/E drop). Words missing from the
+    # map default to KEEP so an absent labels file degrades gracefully.
+    word_labels = _load_word_labels()
+    if word_labels:
+        print(f"  loaded {len(word_labels)} register labels from {WORD_LABELS_PATH}")
+    label_dropped = 0
 
     for entry in tree.iter("entry"):
         ent_seq = entry.findtext("ent_seq") or ""
@@ -474,17 +510,18 @@ def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str])
                 continue
         elif not is_common:
             continue
-        else:
-            # Frequency-rank cutoff. Words with no nf tag (rare — typically
-            # edge-case gairaigo loanwords) pass through; words ranked
-            # below the cutoff are dropped.
-            nf_ranks = [
-                int(t[2:])
-                for t in prio_tags
-                if t.startswith("nf") and t[2:].isdigit()
-            ]
-            if nf_ranks and min(nf_ranks) > NF_FREQUENCY_CUTOFF:
-                continue
+
+        # Register label filter. Drop if the LLM labeled this word as D
+        # (dated/literary) or E (niche/proper-noun-ish). Missing label →
+        # keep (benefit of the doubt). MANUAL_DROP_IDS overrides the LLM
+        # for specific known-borderline calls.
+        if ent_seq in MANUAL_DROP_IDS:
+            label_dropped += 1
+            continue
+        label = word_labels.get(ent_seq)
+        if label in LABELS_TO_DROP:
+            label_dropped += 1
+            continue
 
         # Every kanji in jp must be in our allowed set.
         jp_kanji = [c for c in jp if is_kanji(c)]
@@ -535,6 +572,8 @@ def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str])
             pos=pos_list,
             kanji=sorted(set(jp_kanji)),
         )
+    if word_labels:
+        print(f"  dropped {label_dropped} words via D/E register label")
     print(f"  kept {len(out)} words")
     return out
 
@@ -916,7 +955,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = Fal
     # curriculum expansion from ~284 to ~2900 kanji means every cached
     # client needs to refetch.
     bundle_obj: dict[str, object] = {
-        "version": "9",
+        "version": "10",
         "kanji": {
             ch: {
                 "char": k.char,
