@@ -3,7 +3,6 @@
   import { link } from 'svelte-spa-router';
   import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
   import RevealKanji from '../lib/ui/RevealKanji.svelte';
-  import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
   import { fillKanjiScoreKey } from '../lib/data/mode';
   import { getMeta, putMeta } from '../lib/data/db';
@@ -14,8 +13,19 @@
 
   // ── Level handling (mirrors Home.svelte) ───────────────────────────────
   // Levels: 1=N5, 2=N4, 3=N3+N2, 4=N1, 5=ungraded jouyou/jinmeiyou.
+  // For sentence-eligibility we allow any kanji at the current level OR
+  // BELOW (so a Lvl 3 drill never surfaces a Lvl 4 N1 kanji the learner
+  // hasn't encountered yet).
   const LEVEL_JLPT: Record<number, number[]> = {
     1: [5], 2: [4], 3: [3, 2], 4: [1], 5: [0],
+  };
+  /** JLPT values allowed in the sentence at a given level (level AND all lower). */
+  const LEVEL_JLPT_CUMULATIVE: Record<number, number[]> = {
+    1: [5],
+    2: [5, 4],
+    3: [5, 4, 3, 2],
+    4: [5, 4, 3, 2, 1],
+    5: [5, 4, 3, 2, 1, 0],
   };
   function loadFilter(): 'all' | 1 | 2 | 3 | 4 | 5 {
     const v = sessionStorage.getItem('home-jlpt-filter');
@@ -30,21 +40,23 @@
   interface Question {
     /** The kanji the user is being asked to write. */
     kanji: Kanji;
-    /** Example containing this kanji (picked once, kept for consistency). */
+    /** Example containing this kanji. */
     example: Example;
-    /** Zero-based char index of the first occurrence of `kanji.char` in the
-     *  reconstructed sentence string. */
-    blankIndex: number;
-    /** Pre-reconstructed sentence string (matches segs concat). */
+    /** Index into example.segs of the segment we'll blank out. The segment
+     *  is guaranteed to be a single-kanji seg matching `kanji.char` — this
+     *  lets us render a clean blank box inline with the rest of the
+     *  sentence's furigana instead of trying to mask mid-compound. */
+    targetSegIndex: number;
+    /** Pre-reconstructed sentence string (used only for spoken-audio
+     *  playback after the answer). */
     sentence: string;
-    /** Word whose example we picked from (for the English hint + speaking). */
+    /** Word whose example we picked from (for speaking, etc.). */
     wordJp: string;
   }
 
   const b = bundle();
-  // Restrict to kanji actually at the current level. In 'all' mode, any
-  // kanji is fair game.
-  const levelKanjiSet = $derived.by<Set<string>>(() => {
+  /** Kanji eligible to BE the blank target — only at the current level. */
+  const targetLevelSet = $derived.by<Set<string>>(() => {
     if (filter === 'all') return new Set(Object.keys(b.kanji));
     const wanted = LEVEL_JLPT[filter] ?? [];
     return new Set(
@@ -53,38 +65,66 @@
         .map((k) => k.char),
     );
   });
+  /** Kanji allowed to APPEAR anywhere in the sentence — target level AND
+   *  everything below. Keeps surrounding characters at a level the learner
+   *  has already encountered. */
+  const allowedSentenceKanji = $derived.by<Set<string>>(() => {
+    if (filter === 'all') return new Set(Object.keys(b.kanji));
+    const wanted = LEVEL_JLPT_CUMULATIVE[filter] ?? [];
+    return new Set(
+      Object.values(b.kanji)
+        .filter((k) => wanted.includes(k.jlpt))
+        .map((k) => k.char),
+    );
+  });
 
-  /** Pre-index: kanji char → list of (word, example, blankIndex) triples.
-   *  Built once; picking a random question is then constant-time. */
-  type Triple = { wordJp: string; example: Example; blankIndex: number; sentence: string };
+  /** Pre-index: kanji char → list of (word, example, target-seg-index) triples.
+   *  Only includes examples whose every kanji is allowed at or below level. */
+  type Triple = { wordJp: string; example: Example; targetSegIndex: number; sentence: string };
   const index = $derived.by<Map<string, Triple[]>>(() => {
     const out = new Map<string, Triple[]>();
+    const CJK_MIN = 0x4e00, CJK_MAX = 0x9fff;
+    const isKanji = (c: string) => {
+      const cp = c.codePointAt(0);
+      return cp !== undefined && cp >= CJK_MIN && cp <= CJK_MAX;
+    };
     for (const w of Object.values(b.words)) {
       if (!w.examples || w.examples.length === 0) continue;
       for (const ex of w.examples) {
+        if (!ex.segs || ex.segs.length === 0) continue;
         const sentence = exampleJp(ex);
         if (!sentence) continue;
-        // Collect distinct in-level kanji positions.
+        // Reject the whole example if ANY kanji in it falls outside the
+        // allowed-sentence set (i.e. above the user's level).
+        let sentenceOk = true;
+        for (const c of sentence) {
+          if (isKanji(c) && !allowedSentenceKanji.has(c)) {
+            sentenceOk = false;
+            break;
+          }
+        }
+        if (!sentenceOk) continue;
+        // Look for single-kanji segs we can cleanly blank out. Only the
+        // first occurrence per kanji in this sentence is indexed.
         const seen = new Set<string>();
-        for (let i = 0; i < sentence.length; i++) {
-          const c = sentence[i];
-          if (!levelKanjiSet.has(c)) continue;
-          if (seen.has(c)) continue; // only index the first occurrence per char
-          seen.add(c);
-          const arr = out.get(c) ?? [];
-          arr.push({ wordJp: w.jp, example: ex, blankIndex: i, sentence });
-          out.set(c, arr);
+        for (let i = 0; i < ex.segs.length; i++) {
+          const t = ex.segs[i].t;
+          if (t.length !== 1 || !isKanji(t)) continue;
+          if (!targetLevelSet.has(t)) continue;
+          if (seen.has(t)) continue;
+          seen.add(t);
+          const arr = out.get(t) ?? [];
+          arr.push({ wordJp: w.jp, example: ex, targetSegIndex: i, sentence });
+          out.set(t, arr);
         }
       }
     }
     return out;
   });
 
-  const coverage = $derived(index.size);  // how many level-kanji actually have sentences
+  const coverage = $derived(index.size);
 
   function pickRandom(): Question | null {
-    // Pick a random kanji from the index (coverage may be less than
-    // levelKanjiSet if not every kanji appears in any example sentence).
     const keys = [...index.keys()];
     if (keys.length === 0) return null;
     const ch = keys[Math.floor(Math.random() * keys.length)];
@@ -95,10 +135,19 @@
     return {
       kanji: k,
       example: t.example,
-      blankIndex: t.blankIndex,
+      targetSegIndex: t.targetSegIndex,
       sentence: t.sentence,
       wordJp: t.wordJp,
     };
+  }
+
+  /** True if any codepoint in `s` is in the CJK Unified Ideographs block. */
+  function segHasKanji(s: string): boolean {
+    for (const c of s) {
+      const cp = c.codePointAt(0);
+      if (cp !== undefined && cp >= 0x4e00 && cp <= 0x9fff) return true;
+    }
+    return false;
   }
 
   // ── State ─────────────────────────────────────────────────────────────
@@ -113,14 +162,9 @@
     current = pickRandom();
   });
 
-  // Masked sentence: replace the blank kanji with ◻. We only blank the
-  // first occurrence matching blankIndex — repeated occurrences of the same
-  // kanji in one sentence stay visible (contextual hint).
-  const maskedSentence = $derived.by(() => {
-    if (!current) return '';
-    const s = current.sentence;
-    return s.slice(0, current.blankIndex) + '◻' + s.slice(current.blankIndex + 1);
-  });
+  // Filled (non-blanked) version of the target segment, used in the reveal
+  // state — same data as the original so Furigana keeps its reading / gloss.
+  // No derived state needed: we just skip the blank class for that seg.
 
   // ── Score handling ────────────────────────────────────────────────────
 
@@ -179,19 +223,33 @@
     Fill-in · {filter === 'all' ? 'All levels' : `Lvl ${filter}`} · {solvedCount}/{attemptedCount} correct
   </div>
 
-  <!-- ── Masked sentence prompt ───────────────────────────────────────── -->
+  <!-- ── Sentence prompt ──────────────────────────────────────────────
+       Renders inline: each non-target seg gets its furigana; the target
+       seg becomes a dashed blank box while unanswered, and flips back to
+       the real kanji with its reading once the user has scored.
+       ─────────────────────────────────────────────────────────────── -->
   <div class="prompt-card">
-    <div class="masked-sentence">
-      {#each maskedSentence as ch, i}{#if ch === '◻'}<span class="blank">？</span>{:else}<span>{ch}</span>{/if}{/each}
+    <div class="sentence-line">
+      {#each current.example.segs as seg, i}
+        {#if i === current.targetSegIndex && drawScore === null}
+          <span class="blank" aria-label="missing kanji">？</span>
+        {:else if segHasKanji(seg.t)}
+          <ruby>{seg.t}<rt>{seg.r ?? ''}</rt></ruby>
+        {:else}
+          <span>{seg.t}</span>
+        {/if}
+      {/each}
     </div>
     <div class="en-hint">{current.example.en}</div>
-    <div class="speak-hint">
-      <button
-        class="speak-btn"
-        onclick={() => speakJa(current!.sentence.replace(current!.kanji.char, ''))}
-        aria-label="Hear sentence (skipping the blank)"
-      >🔊 Hear sentence</button>
-    </div>
+    {#if drawScore !== null}
+      <div class="speak-hint">
+        <button
+          class="speak-btn"
+          onclick={() => speakJa(current!.sentence)}
+          aria-label="Hear the full sentence"
+        >🔊 Hear sentence</button>
+      </div>
+    {/if}
   </div>
 
   <!-- ── Drawing UI ───────────────────────────────────────────────────── -->
@@ -218,14 +276,11 @@
   <!-- ── Reveal after scoring ─────────────────────────────────────────── -->
   {#if drawScore !== null}
     <div class="answer-reveal">
-      <div class="revealed-sentence">
-        <Furigana segments={current.example.segs} />
-      </div>
       <div class="reveal-meaning">
-        Target kanji: <span class="hero-kanji">{current.kanji.char}</span>
+        Answer: <span class="hero-kanji">{current.kanji.char}</span>
         · <span class="reveal-reading">{current.kanji.kun.map((r) => r.replace(/[.\-]/g, ''))[0] ?? current.kanji.on[0] ?? ''}</span>
+        · {current.kanji.meanings.slice(0, 3).join(', ')}
       </div>
-      <div class="reveal-meaning">{current.kanji.meanings.slice(0, 3).join(', ')}</div>
       <div class="draw-score-line" class:ok={drawScore >= 70} class:bad={drawScore < 70}>
         Score: {drawScore} / 100 · {drawScore >= 70 ? 'passed ✓' : 'try again ✗'}
       </div>
@@ -251,10 +306,18 @@
     margin: 0.5rem 1rem 0.75rem;
     text-align: center;
   }
-  .masked-sentence {
+  .sentence-line {
     font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
     font-size: 1.5rem;
-    line-height: 2;
+    line-height: 2.4;
+    letter-spacing: 0.02em;
+  }
+  .sentence-line ruby { ruby-position: over; }
+  .sentence-line rt {
+    font-size: 0.55em;
+    color: var(--accent);
+    font-weight: 500;
+    font-family: 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
     letter-spacing: 0.02em;
   }
   .blank {
@@ -308,11 +371,6 @@
   .answer-reveal {
     text-align: center;
     padding: 0.75rem 1rem 0;
-  }
-  .revealed-sentence {
-    font-size: 1.3rem;
-    line-height: 2.3;
-    margin-bottom: 0.5rem;
   }
   .reveal-meaning {
     font-size: 0.95rem;
