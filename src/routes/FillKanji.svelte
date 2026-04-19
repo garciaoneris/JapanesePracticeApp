@@ -241,15 +241,17 @@
       {/each}
     </div>
     <div class="en-hint">{current.example.en}</div>
-    {#if drawScore !== null}
-      <div class="speak-hint">
-        <button
-          class="speak-btn"
-          onclick={() => speakJa(current!.sentence)}
-          aria-label="Hear the full sentence"
-        >🔊 Hear sentence</button>
-      </div>
-    {/if}
+    <!-- Always rendered so the card height is stable between unanswered
+         and revealed states; visibility toggles so the button only acts
+         once the blank is filled in. -->
+    <div class="speak-hint" class:hidden={drawScore === null}>
+      <button
+        class="speak-btn"
+        onclick={() => speakJa(current!.sentence)}
+        aria-label="Hear the full sentence"
+        disabled={drawScore === null}
+      >🔊 Hear sentence</button>
+    </div>
   </div>
 
   <!-- ── Drawing UI ───────────────────────────────────────────────────── -->
@@ -338,6 +340,7 @@
     line-height: 1.4;
   }
   .speak-hint { margin-top: 0.5rem; }
+  .speak-hint.hidden { visibility: hidden; }
   .speak-btn {
     padding: 0.35rem 0.8rem;
     background: transparent;
