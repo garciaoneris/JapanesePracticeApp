@@ -35,3 +35,10 @@ export async function reviewScoreKey(): Promise<string> {
 export async function reviewDrawScoreKey(): Promise<string> {
   return (await isNativeMode()) ? 'native-review-draw-scores' : 'review-draw-scores';
 }
+
+/** IndexedDB meta key for fill-in-the-kanji sentence-drill scores
+ * (writing practice where one kanji is blanked out of a sentence and the
+ * learner must draw it from context). */
+export async function fillKanjiScoreKey(): Promise<string> {
+  return (await isNativeMode()) ? 'native-fill-kanji-scores' : 'fill-kanji-scores';
+}

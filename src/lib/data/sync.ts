@@ -27,6 +27,10 @@ export interface SyncPayload {
   reviewDrawScores?: Record<string, number>;
   /** Per-kanji review-drawing best scores (native mode). */
   nativeReviewDrawScores?: Record<string, number>;
+  /** Per-kanji fill-in-the-blank (sentence drill) best scores, regular mode. */
+  fillKanjiScores?: Record<string, number>;
+  /** Per-kanji fill-in-the-blank scores, native mode. */
+  nativeFillKanjiScores?: Record<string, number>;
   /** Whether native mode is enabled (all kanji treated as mastered). */
   nativeMode?: boolean;
   /** Open mistakes the user hasn't yet reinforced to clearance (regular mode). */
@@ -159,6 +163,10 @@ export async function collectLocal(): Promise<SyncPayload> {
   const reviewDrawScores = (await getMeta<Record<string, number>>('review-draw-scores')) ?? {};
   const nativeReviewDrawScores = (await getMeta<Record<string, number>>('native-review-draw-scores')) ?? {};
 
+  // Fill-kanji (sentence drill) scores — regular + native mode
+  const fillKanjiScores = (await getMeta<Record<string, number>>('fill-kanji-scores')) ?? {};
+  const nativeFillKanjiScores = (await getMeta<Record<string, number>>('native-fill-kanji-scores')) ?? {};
+
   // Native mode flag
   const nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
 
@@ -171,6 +179,7 @@ export async function collectLocal(): Promise<SyncPayload> {
     quizScores, reviewScores, nativeQuizScores, nativeReviewScores, nativeMode,
     mistakes, nativeMistakes,
     reviewDrawScores, nativeReviewDrawScores,
+    fillKanjiScores, nativeFillKanjiScores,
   };
 }
 
@@ -331,6 +340,30 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
       }
     }
     if (nrdModified) { await putMeta('native-review-draw-scores', local); modified = true; }
+  }
+
+  // ---- Merge fill-kanji scores (regular + native, max wins) ----
+  if (remote.fillKanjiScores) {
+    const local = (await getMeta<Record<string, number>>('fill-kanji-scores')) ?? {};
+    let fkModified = false;
+    for (const [char, remoteScore] of Object.entries(remote.fillKanjiScores)) {
+      if (remoteScore > (local[char] ?? 0)) {
+        local[char] = remoteScore;
+        fkModified = true;
+      }
+    }
+    if (fkModified) { await putMeta('fill-kanji-scores', local); modified = true; }
+  }
+  if (remote.nativeFillKanjiScores) {
+    const local = (await getMeta<Record<string, number>>('native-fill-kanji-scores')) ?? {};
+    let nfkModified = false;
+    for (const [char, remoteScore] of Object.entries(remote.nativeFillKanjiScores)) {
+      if (remoteScore > (local[char] ?? 0)) {
+        local[char] = remoteScore;
+        nfkModified = true;
+      }
+    }
+    if (nfkModified) { await putMeta('native-fill-kanji-scores', local); modified = true; }
   }
 
   // ---- Merge native mode flag ----

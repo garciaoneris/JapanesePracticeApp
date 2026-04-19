@@ -180,6 +180,10 @@
         <span class="cta-icon">📘</span>
         <span>Vocabulary</span>
       </a>
+      <a class="cta secondary" href="/fill-kanji" use:link>
+        <span class="cta-icon">✏️</span>
+        <span>Fill{filter !== 'all' ? ` Lvl ${filter}` : ''}</span>
+      </a>
       {#if mistakeCount > 0}
         <a class="cta reinforce" href="/reinforce" use:link>
           <span class="cta-icon">💪</span>

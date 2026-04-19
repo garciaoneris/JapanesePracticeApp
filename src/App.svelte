@@ -6,6 +6,7 @@
   import Vocabulary from './routes/Vocabulary.svelte';
   import Review from './routes/Review.svelte';
   import Reinforce from './routes/Reinforce.svelte';
+  import FillKanji from './routes/FillKanji.svelte';
   import Settings from './routes/Settings.svelte';
   import NotFound from './routes/NotFound.svelte';
   import { onMount } from 'svelte';
@@ -18,6 +19,7 @@
     '/learn/:char': Learn,
     '/vocab/:id': Vocab,
     '/review': Review,
+    '/fill-kanji': FillKanji,
     '/settings': Settings,
     '/reinforce': Reinforce,
     '*': NotFound,
