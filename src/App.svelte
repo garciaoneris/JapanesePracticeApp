@@ -12,6 +12,7 @@
   import { onMount } from 'svelte';
   import { ensureBundleLoaded } from './lib/data/bundle';
   import { syncNow, getToken } from './lib/data/sync';
+  import { loadFuriganaMode } from './lib/data/furiganaMode';
 
   const routes = {
     '/': Home,
@@ -31,6 +32,8 @@
   onMount(async () => {
     try {
       await ensureBundleLoaded();
+      // Prime the furigana-mode cache before any Furigana instance mounts.
+      await loadFuriganaMode();
       // Background sync on startup if a token is configured.
       getToken().then((t) => { if (t) syncNow().catch(() => {}); });
     } catch (e) {

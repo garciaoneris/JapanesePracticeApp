@@ -5,6 +5,7 @@
   import { getMeta, putMeta } from '../lib/data/db';
   import { setNativeModeCache } from '../lib/data/mode';
   import type { ClearedMistake, Mistake } from '../lib/data/mistakes';
+  import { getFuriganaMode, setFuriganaMode, type FuriganaMode } from '../lib/data/furiganaMode';
 
   let token = $state<string | null>(null);
   let tokenInput = $state('');
@@ -82,10 +83,18 @@
     }
   }
 
+  let furiganaMode = $state<FuriganaMode>(getFuriganaMode());
+
   onMount(async () => {
     await refreshState();
     nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
+    furiganaMode = getFuriganaMode();
   });
+
+  async function handleFuriganaChange() {
+    await setFuriganaMode(furiganaMode);
+    schedulePush();
+  }
 
   async function handleNativeToggle() {
     await putMeta('native-mode', nativeMode);
@@ -145,6 +154,40 @@
     <p class="desc toggle-desc">
       Treat all kanji as mastered. Unlocks all vocabulary and review content.
     </p>
+
+    <div class="sub-section">
+      <div class="field-label">Furigana (hiragana reading)</div>
+      <label class="radio-row">
+        <input
+          type="radio"
+          name="furigana-mode"
+          value="always"
+          bind:group={furiganaMode}
+          onchange={handleFuriganaChange}
+        />
+        <span>Always show</span>
+      </label>
+      <label class="radio-row">
+        <input
+          type="radio"
+          name="furigana-mode"
+          value="hide-mastered"
+          bind:group={furiganaMode}
+          onchange={handleFuriganaChange}
+        />
+        <span>Hide on mastered kanji</span>
+      </label>
+      <label class="radio-row">
+        <input
+          type="radio"
+          name="furigana-mode"
+          value="never"
+          bind:group={furiganaMode}
+          onchange={handleFuriganaChange}
+        />
+        <span>Never show</span>
+      </label>
+    </div>
   </section>
 
   <section class="card">
@@ -264,6 +307,34 @@
     border-radius: 16px;
     padding: 1.25rem;
     margin-bottom: 1rem;
+  }
+
+  .sub-section {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .sub-section .field-label {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--fg-dim);
+    margin-bottom: 0.5rem;
+  }
+  .radio-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.35rem 0;
+    cursor: pointer;
+    font-size: 0.95rem;
+    color: var(--fg);
+  }
+  .radio-row input[type="radio"] {
+    accent-color: var(--accent);
+    width: 1.05rem;
+    height: 1.05rem;
+    margin: 0;
+    cursor: pointer;
   }
 
   .section-title {

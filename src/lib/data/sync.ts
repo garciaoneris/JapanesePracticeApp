@@ -1,6 +1,7 @@
 import { db, getMeta, putMeta, deleteMeta, getAllBestScores } from './db';
 import type { SrsState, Attempt } from './types';
 import type { Mistake, ClearedMistake } from './mistakes';
+import { setFuriganaModeCache, type FuriganaMode } from './furiganaMode';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -33,6 +34,8 @@ export interface SyncPayload {
   nativeFillKanjiScores?: Record<string, number>;
   /** Whether native mode is enabled (all kanji treated as mastered). */
   nativeMode?: boolean;
+  /** User's furigana display preference. */
+  furiganaMode?: FuriganaMode;
   /** Open mistakes the user hasn't yet reinforced to clearance (regular mode). */
   mistakes?: Mistake[];
   /** Open mistakes in native mode (tracked separately). */
@@ -176,6 +179,9 @@ export async function collectLocal(): Promise<SyncPayload> {
   // Native mode flag
   const nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
 
+  // Furigana preference.
+  const furiganaMode = (await getMeta<FuriganaMode>('furigana-mode')) ?? 'always';
+
   // Open mistakes — regular + native (tracked separately, same as scores)
   const mistakes = (await getMeta<Mistake[]>('mistakes')) ?? [];
   const nativeMistakes = (await getMeta<Mistake[]>('native-mistakes')) ?? [];
@@ -189,6 +195,7 @@ export async function collectLocal(): Promise<SyncPayload> {
   return {
     v: 1, ts: Date.now(), scores, srs, attempts,
     quizScores, reviewScores, nativeQuizScores, nativeReviewScores, nativeMode,
+    furiganaMode,
     mistakes, nativeMistakes,
     mistakesCleared, nativeMistakesCleared,
     reviewDrawScores, nativeReviewDrawScores,
@@ -384,6 +391,19 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
     const localNative = (await getMeta<boolean>('native-mode')) ?? false;
     if (remote.nativeMode && !localNative) {
       await putMeta('native-mode', true);
+      modified = true;
+    }
+  }
+
+  // ---- Merge furigana mode (last-writer-wins across devices) ----
+  if (remote.furiganaMode !== undefined &&
+      (remote.furiganaMode === 'always' ||
+       remote.furiganaMode === 'hide-mastered' ||
+       remote.furiganaMode === 'never')) {
+    const localFuri = (await getMeta<FuriganaMode>('furigana-mode')) ?? 'always';
+    if (remote.furiganaMode !== localFuri) {
+      await putMeta('furigana-mode', remote.furiganaMode);
+      setFuriganaModeCache(remote.furiganaMode);
       modified = true;
     }
   }

@@ -1,20 +1,31 @@
 <script lang="ts">
   import type { Segment } from '../data/types';
   import { speakJa } from '../speech/tts';
+  import { getFuriganaMode, subscribeFuriganaMode, type FuriganaMode } from '../data/furiganaMode';
 
   interface Props {
     segments: Segment[];
-    /** Kanji the learner has mastered (score >= 80). Segments whose kanji are
-     * all in this set render as plain text; others render with furigana. */
+    /** Kanji the learner has mastered (score >= 80). Only consulted when the
+     * user's furigana-mode setting is 'hide-mastered' — then segments whose
+     * kanji are all in this set render as plain. */
     knownKanji?: ReadonlySet<string>;
-    /** The kanji currently being studied is implicitly known even before it
-     * reaches the score threshold — otherwise the Learn page would put ruby
-     * on its own hero character. */
+    /** The kanji currently being studied is implicitly treated as known in
+     * 'hide-mastered' mode — otherwise the Learn page would put ruby on its
+     * own hero character. */
     currentKanji?: string;
   }
   const { segments, knownKanji, currentKanji }: Props = $props();
 
-  import { onDestroy } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+
+  // React to the user's global furigana preference: 'always', 'never',
+  // or 'hide-mastered'. Start from the module-level cache (primed in
+  // App.svelte on startup) so the first render is already correct.
+  let furiganaMode = $state<FuriganaMode>(getFuriganaMode());
+  let unsubscribeMode: (() => void) | null = null;
+  onMount(() => {
+    unsubscribeMode = subscribeFuriganaMode((m) => { furiganaMode = m; });
+  });
 
   // Container ref so we can scope gloss-idx queries to THIS instance.
   let container: HTMLElement;
@@ -96,6 +107,7 @@
 
   onDestroy(() => {
     if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; }
+    if (unsubscribeMode) { unsubscribeMode(); unsubscribeMode = null; }
   });
 
   // Deterministic golden-angle hue spacing: 73° gives adjacent segments
@@ -127,21 +139,14 @@
     return true;
   }
 
-  /** Decide the rendering mode for a segment. Always show furigana on
-   * kanji-containing segments regardless of mastery — the old "hide
-   * furigana once all kanji are score≥80 mastered" behavior was too
-   * aggressive (users want the reading available for reference even on
-   * familiar words). The `knownKanji` / `currentKanji` props and the
-   * `allKnown` helper are kept for API compatibility with callers but
-   * are no longer consulted here. */
+  /** Decide the rendering mode for a segment based on the user's global
+   * furigana preference. */
   function modeFor(seg: Segment): 'ruby' | 'plain' {
     if (!hasKanji(seg)) return 'plain';
+    if (furiganaMode === 'never') return 'plain';
+    if (furiganaMode === 'hide-mastered' && allKnown(seg)) return 'plain';
     return 'ruby';
   }
-  // Keep `allKnown` referenced so TS / svelte-check doesn't warn about an
-  // unused helper — it's intentionally retained for possible future
-  // toggle-driven modes (e.g. "hide furigana on mastered").
-  void allKnown;
 
   function positionTooltip(target: HTMLElement) {
     const rect = target.getBoundingClientRect();
