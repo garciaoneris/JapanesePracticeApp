@@ -1,6 +1,6 @@
 import { db, getMeta, putMeta, deleteMeta, getAllBestScores } from './db';
 import type { SrsState, Attempt } from './types';
-import type { Mistake } from './mistakes';
+import type { Mistake, ClearedMistake } from './mistakes';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -37,6 +37,12 @@ export interface SyncPayload {
   mistakes?: Mistake[];
   /** Open mistakes in native mode (tracked separately). */
   nativeMistakes?: Mistake[];
+  /** Tombstones for mistakes cleared via Reinforce (regular). Prevents
+   *  a second device's stale active-mistake list from resurrecting
+   *  already-resolved mistakes after the user fixes them on device A. */
+  mistakesCleared?: ClearedMistake[];
+  /** Cleared-mistake tombstones, native mode. */
+  nativeMistakesCleared?: ClearedMistake[];
 }
 
 // ── Token management ─────────────────────────────────────────────────────
@@ -174,10 +180,17 @@ export async function collectLocal(): Promise<SyncPayload> {
   const mistakes = (await getMeta<Mistake[]>('mistakes')) ?? [];
   const nativeMistakes = (await getMeta<Mistake[]>('native-mistakes')) ?? [];
 
+  // Cleared-mistake tombstones — regular + native (paired with the mistakes
+  // lists so pullFromGist can distinguish "cleared on the other device"
+  // from "never existed on this device").
+  const mistakesCleared = (await getMeta<ClearedMistake[]>('mistakes-cleared')) ?? [];
+  const nativeMistakesCleared = (await getMeta<ClearedMistake[]>('native-mistakes-cleared')) ?? [];
+
   return {
     v: 1, ts: Date.now(), scores, srs, attempts,
     quizScores, reviewScores, nativeQuizScores, nativeReviewScores, nativeMode,
     mistakes, nativeMistakes,
+    mistakesCleared, nativeMistakesCleared,
     reviewDrawScores, nativeReviewDrawScores,
     fillKanjiScores, nativeFillKanjiScores,
   };
@@ -375,52 +388,106 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
     }
   }
 
-  // ---- Merge open mistakes (regular + native, keyed by type+id) ----
+  // ---- Merge cleared-mistake tombstones FIRST (needed for active merge) --
+  // Tombstones are a union keyed by `${type}:${id}` with max `clearedAt`.
+  const mergedCleared = await mergeClearedMistakes(
+    'mistakes-cleared', remote.mistakesCleared ?? [],
+  );
+  if (mergedCleared.changed) modified = true;
+  const mergedNativeCleared = await mergeClearedMistakes(
+    'native-mistakes-cleared', remote.nativeMistakesCleared ?? [],
+  );
+  if (mergedNativeCleared.changed) modified = true;
+
+  // ---- Merge open mistakes, honoring tombstones ----
   if (remote.mistakes) {
-    if (await mergeMistakes('mistakes', remote.mistakes)) modified = true;
+    if (await mergeMistakes('mistakes', remote.mistakes, mergedCleared.list)) modified = true;
   }
   if (remote.nativeMistakes) {
-    if (await mergeMistakes('native-mistakes', remote.nativeMistakes)) modified = true;
+    if (await mergeMistakes('native-mistakes', remote.nativeMistakes, mergedNativeCleared.list)) modified = true;
   }
 
   return modified;
 }
 
-/** Merge a remote mistakes list into the local one at the given meta key.
+/** Merge a remote cleared-mistakes tombstone list into the local one.
+ *  Tombstones are keyed by type+id; on conflict we keep the MAX clearedAt
+ *  (more recent clearing wins). Returns the merged list so the subsequent
+ *  active-mistakes merge can reference it. */
+async function mergeClearedMistakes(
+  key: string, remote: ClearedMistake[],
+): Promise<{ list: ClearedMistake[]; changed: boolean }> {
+  const local = (await getMeta<ClearedMistake[]>(key)) ?? [];
+  const index = new Map<string, ClearedMistake>();
+  for (const c of local) index.set(`${c.type}:${c.id}`, c);
+  let changed = false;
+  for (const rc of remote) {
+    const k = `${rc.type}:${rc.id}`;
+    const lc = index.get(k);
+    if (!lc) {
+      index.set(k, { ...rc });
+      changed = true;
+    } else if (rc.clearedAt > lc.clearedAt) {
+      index.set(k, { ...rc });
+      changed = true;
+    }
+  }
+  const list = [...index.values()];
+  if (changed) await putMeta(key, list);
+  return { list, changed };
+}
+
+/** Merge a remote mistakes list into the local one.
+ *
  *  Strategy: union by `${type}:${id}`. For conflicts, take max of
- *  count/streak/lastSeen (more progress wins). New remote entries are
- *  imported. Returns true if the local list was modified. */
-async function mergeMistakes(key: string, remote: Mistake[]): Promise<boolean> {
+ *  count/streak/lastSeen (more progress wins). Then DROP any entry
+ *  whose `lastSeen` is at-or-before the corresponding cleared-tombstone
+ *  `clearedAt` — that means the other device has since resolved the
+ *  mistake, so we shouldn't resurrect it even if remote's stale payload
+ *  still contains it. If a later re-miss has bumped lastSeen past
+ *  clearedAt, the tombstone no longer applies and the mistake is active
+ *  again. */
+async function mergeMistakes(
+  key: string, remote: Mistake[], cleared: ClearedMistake[],
+): Promise<boolean> {
   const local = (await getMeta<Mistake[]>(key)) ?? [];
+  const clearedByKey = new Map<string, number>();
+  for (const c of cleared) clearedByKey.set(`${c.type}:${c.id}`, c.clearedAt);
+
   const index = new Map<string, Mistake>();
   for (const m of local) index.set(`${m.type}:${m.id}`, m);
-  let changed = false;
   for (const rm of remote) {
     const k = `${rm.type}:${rm.id}`;
     const lm = index.get(k);
     if (!lm) {
       index.set(k, { ...rm });
-      changed = true;
     } else {
-      const merged: Mistake = {
+      index.set(k, {
         type: rm.type,
         id: rm.id,
         count: Math.max(lm.count, rm.count),
         streak: Math.max(lm.streak, rm.streak),
         lastSeen: Math.max(lm.lastSeen, rm.lastSeen),
-      };
-      if (
-        merged.count !== lm.count ||
-        merged.streak !== lm.streak ||
-        merged.lastSeen !== lm.lastSeen
-      ) {
-        index.set(k, merged);
-        changed = true;
-      }
+      });
     }
   }
-  if (changed) await putMeta(key, [...index.values()]);
-  return changed;
+
+  // Apply tombstones: drop any active entry whose most-recent activity
+  // is older than the tombstone (i.e. cleared after last miss).
+  const merged: Mistake[] = [];
+  for (const [k, m] of index) {
+    const clearedAt = clearedByKey.get(k) ?? 0;
+    if (m.lastSeen > clearedAt) merged.push(m);
+  }
+
+  // Detect change: signatures of (id, type, count, streak, lastSeen).
+  const sigOf = (ms: Mistake[]) => ms
+    .map((m) => `${m.type}:${m.id}:${m.count}:${m.streak}:${m.lastSeen}`)
+    .sort()
+    .join('|');
+  if (sigOf(local) === sigOf(merged)) return false;
+  await putMeta(key, merged);
+  return true;
 }
 
 // ── Orchestration ────────────────────────────────────────────────────────

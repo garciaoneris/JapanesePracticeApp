@@ -23,11 +23,33 @@ export interface Mistake {
   lastSeen: number;
 }
 
+/** Tombstone written when a mistake is cleared (reached the 3-streak
+ * threshold in Reinforce). Kept in IndexedDB + synced via gist so a
+ * second device that still has the stale active mistake learns that the
+ * first device has since resolved it, and doesn't resurrect the mistake
+ * on the next pull. Compared via `clearedAt` vs mistake `lastSeen` so a
+ * brand-new re-miss (recordMistake updates lastSeen past clearedAt)
+ * correctly re-opens the mistake. */
+export interface ClearedMistake {
+  type: MistakeType;
+  id: string;
+  clearedAt: number;
+}
+
 /** Number of consecutive correct answers required to clear a mistake. */
 export const REINFORCE_CLEAR_STREAK = 3;
 
 export async function mistakesKey(): Promise<string> {
   return (await isNativeMode()) ? 'native-mistakes' : 'mistakes';
+}
+
+/** IndexedDB meta key for cleared-mistake tombstones in the current mode. */
+export async function clearedMistakesKey(): Promise<string> {
+  return (await isNativeMode()) ? 'native-mistakes-cleared' : 'mistakes-cleared';
+}
+
+export async function getClearedMistakes(): Promise<ClearedMistake[]> {
+  return (await getMeta<ClearedMistake[]>(await clearedMistakesKey())) ?? [];
 }
 
 export async function getMistakes(): Promise<Mistake[]> {
@@ -65,15 +87,27 @@ export async function recordMistake(
   pushSync();
 }
 
-/** Correct answer in Reinforce: bump streak; remove entry when cleared. */
+/** Correct answer in Reinforce: bump streak; remove entry when cleared
+ * and write a tombstone to the cleared-mistakes list so other devices
+ * can tell the resolution apart from a never-synced stale entry. */
 export async function reinforceCorrect(type: MistakeType, id: string): Promise<void> {
   const list = await getMistakes();
   const idx = list.findIndex((x) => x.type === type && x.id === id);
   if (idx < 0) return;
+  const now = Date.now();
   list[idx].streak += 1;
-  list[idx].lastSeen = Date.now();
+  list[idx].lastSeen = now;
   if (list[idx].streak >= REINFORCE_CLEAR_STREAK) {
     list.splice(idx, 1);
+    // Record tombstone.
+    const cleared = await getClearedMistakes();
+    const ti = cleared.findIndex((c) => c.type === type && c.id === id);
+    if (ti >= 0) {
+      cleared[ti].clearedAt = now;  // bump if re-cleared later
+    } else {
+      cleared.push({ type, id, clearedAt: now });
+    }
+    await putMeta(await clearedMistakesKey(), cleared);
   }
   await putMeta(await mistakesKey(), list);
   pushSync();
