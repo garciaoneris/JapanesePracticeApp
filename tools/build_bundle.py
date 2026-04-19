@@ -532,6 +532,13 @@ def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str])
         # kanji-learning tool; a word with no kanji has no place to study.
         if not jp_kanji:
             continue
+        # Drop single-kanji "words" — the kanji's own meaning is already
+        # covered by its KANJIDIC2 entry, and JMdict's per-reading splits
+        # (上 うえ "above" vs 上 かみ "upstream" vs 上 じょう suffix) just
+        # introduce narrow idiomatic senses that confuse learners. Keep
+        # only compound words (2+ characters in the headword).
+        if len(jp) == 1:
+            continue
         # Drop archaic ateji entries for foreign place names / loan words
         # (寿府 = Geneva, 倫敦 = London, 亜米利加 = America, 巴里 = Paris, ...).
         # These words have kanji but the canonical reading is pure katakana
@@ -955,7 +962,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = Fal
     # curriculum expansion from ~284 to ~2900 kanji means every cached
     # client needs to refetch.
     bundle_obj: dict[str, object] = {
-        "version": "10",
+        "version": "11",
         "kanji": {
             ch: {
                 "char": k.char,
