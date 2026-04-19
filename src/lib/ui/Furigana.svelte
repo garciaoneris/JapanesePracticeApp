@@ -127,13 +127,21 @@
     return true;
   }
 
-  /** Decide the rendering mode for a segment. */
-  function modeFor(seg: Segment): 'ruby' | 'plain-glossed' | 'plain' {
+  /** Decide the rendering mode for a segment. Always show furigana on
+   * kanji-containing segments regardless of mastery — the old "hide
+   * furigana once all kanji are score≥80 mastered" behavior was too
+   * aggressive (users want the reading available for reference even on
+   * familiar words). The `knownKanji` / `currentKanji` props and the
+   * `allKnown` helper are kept for API compatibility with callers but
+   * are no longer consulted here. */
+  function modeFor(seg: Segment): 'ruby' | 'plain' {
     if (!hasKanji(seg)) return 'plain';
-    const clickable = !!seg.g;
-    if (!allKnown(seg)) return 'ruby';
-    return clickable ? 'plain-glossed' : 'plain';
+    return 'ruby';
   }
+  // Keep `allKnown` referenced so TS / svelte-check doesn't warn about an
+  // unused helper — it's intentionally retained for possible future
+  // toggle-driven modes (e.g. "hide furigana on mastered").
+  void allKnown;
 
   function positionTooltip(target: HTMLElement) {
     const rect = target.getBoundingClientRect();
@@ -216,18 +224,6 @@
       >
         {seg.t}<rt>{seg.r ?? ''}</rt>
       </ruby>
-    {:else if mode === 'plain-glossed'}
-      <span
-        class="glossable clickable"
-        style="--hue: {hueFor(i)}deg"
-        data-gloss-idx={i}
-        onclick={(e) => onWordTap(i, seg, e)}
-        onkeydown={(e) => onKey(i, seg, e)}
-        role="button"
-        tabindex="0"
-      >
-        {seg.t}
-      </span>
     {:else}
       <span class="plain">{seg.t}</span>
     {/if}
