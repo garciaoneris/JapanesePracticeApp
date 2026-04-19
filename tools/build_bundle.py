@@ -420,9 +420,28 @@ def parse_kanjivg(path: Path, chars: set[str]) -> dict[str, str]:
 
 
 POS_KEEP_PREFIXES = ("n", "v", "adj", "adv", "exp", "prt", "int", "conj", "pn")
-# JMdict priority tags that mark a headword as "common". Keeping any of these filters
-# the ~200k JMdict entries down to ~30k high-frequency words.
-COMMON_PRIO_TAGS = {"ichi1", "ichi2", "news1", "news2", "spec1", "spec2", "gai1"}
+# JMdict priority tags that mark a headword as "common".
+#
+# Dropped `spec1` / `spec2` ("dictionary editor's pick"): those tags pull in a
+# lot of dated / formal / literary / niche vocabulary that clutters a
+# conversational learner app. Keeping only frequency-based tiers (ichi =
+# Ichimango top-20k lemmas, news = Mainichi news corpus top-24k, gai =
+# common foreign loanwords).
+COMMON_PRIO_TAGS = {"ichi1", "ichi2", "news1", "news2", "gai1"}
+
+# JMdict also tags each common word with `nfXX` where XX is a frequency
+# RANK bucket (nf01 = top 500, nf02 = 500-1000, ..., nf48 = 23500-24000).
+# Lower = more frequent. Filtering on this is the single strongest signal
+# for "is this word a learner actually encounters?" — stronger than misc
+# tags (usually empty) or priority tiers (overlap too much).
+#
+# nf22 ≈ top 11,000 words by combined news + lemma frequency. Empirically:
+#   教会 nf05  泥棒 nf15  口座 nf05      — core everyday, kept
+#   子女 nf23  異邦人 nf34  感興 nf46    — dated / formal / literary, dropped
+#   気丈 nf33  所期 nf33  攻め立てる nf46 — same, dropped
+# A few residual "news-frequent but niche" words slip through (創価学会 nf09,
+# 落語家 nf17) — no filter catches those without also cutting common words.
+NF_FREQUENCY_CUTOFF = 22
 
 
 def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str]) -> dict[str, WordOut]:
@@ -455,6 +474,17 @@ def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str])
                 continue
         elif not is_common:
             continue
+        else:
+            # Frequency-rank cutoff. Words with no nf tag (rare — typically
+            # edge-case gairaigo loanwords) pass through; words ranked
+            # below the cutoff are dropped.
+            nf_ranks = [
+                int(t[2:])
+                for t in prio_tags
+                if t.startswith("nf") and t[2:].isdigit()
+            ]
+            if nf_ranks and min(nf_ranks) > NF_FREQUENCY_CUTOFF:
+                continue
 
         # Every kanji in jp must be in our allowed set.
         jp_kanji = [c for c in jp if is_kanji(c)]
@@ -886,7 +916,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = Fal
     # curriculum expansion from ~284 to ~2900 kanji means every cached
     # client needs to refetch.
     bundle_obj: dict[str, object] = {
-        "version": "8",
+        "version": "9",
         "kanji": {
             ch: {
                 "char": k.char,
