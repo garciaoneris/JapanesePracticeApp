@@ -797,6 +797,53 @@ def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = Fal
     words = parse_jmdict(jmdict_path, allowed_kanji, vocab_whitelist)
     t_build0 = _timed("parse_jmdict", t_build0)
 
+    # Synthesize one "word" entry per kanji using its canonical KANJIDIC2
+    # meaning. The old approach pulled single-kanji words from JMdict but
+    # those entries have narrow idiomatic senses (上 かみ "upper reaches of a
+    # river", 上 じょう "from the standpoint of") — noisy for learners. We
+    # drop those in parse_jmdict, and here we restore a single clean entry
+    # per kanji so Review / Vocabulary modes still treat each kanji as
+    # vocabulary — but with the canonical "above, up, on top" gloss instead.
+    synth_added = 0
+    for ch, k in kanji.items():
+        synth_id = f"k:{ch}"
+        if synth_id in words:
+            continue  # shouldn't happen but belt-and-suspenders
+        # Primary reading: first kun (stripped of . / - markers), falling
+        # back to the first on in hiragana. Skip this kanji if it has
+        # neither a reading nor any KANJIDIC meaning (shouldn't happen for
+        # curriculum-worthy kanji).
+        reading = ""
+        for r in k.kun:
+            clean = r.replace(".", "").replace("-", "").strip()
+            if clean:
+                reading = clean
+                break
+        if not reading:
+            for r in k.on:
+                # katakana → hiragana for consistency with word.reading shape
+                clean = r.replace(".", "").replace("-", "").strip()
+                if clean:
+                    reading = "".join(
+                        chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c
+                        for c in clean
+                    )
+                    break
+        if not reading or not k.meanings:
+            continue
+        words[synth_id] = WordOut(
+            id=synth_id,
+            jp=ch,
+            reading=reading,
+            meanings=k.meanings[:3],
+            meaning_pos=[],
+            pos=["n"],  # nominal; harmless placeholder for downstream POS filters
+            kanji=[ch],
+        )
+        synth_added += 1
+    print(f"  synthesized {synth_added} single-kanji canonical word entries")
+    t_build0 = _timed("synth_kanji_words", t_build0)
+
     # Index words by their Japanese surface form so the example segmenter can
     # look up glosses quickly. JMdict sometimes has TWO entries sharing a
     # headword — e.g. 人 has a separate entry for the suffix "-ian / -ite /
@@ -962,7 +1009,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = Fal
     # curriculum expansion from ~284 to ~2900 kanji means every cached
     # client needs to refetch.
     bundle_obj: dict[str, object] = {
-        "version": "11",
+        "version": "12",
         "kanji": {
             ch: {
                 "char": k.char,
