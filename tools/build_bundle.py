@@ -1009,7 +1009,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = Fal
     # curriculum expansion from ~284 to ~2900 kanji means every cached
     # client needs to refetch.
     bundle_obj: dict[str, object] = {
-        "version": "12",
+        "version": "13",
         "kanji": {
             ch: {
                 "char": k.char,

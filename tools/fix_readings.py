@@ -217,6 +217,62 @@ def reading_for_range(
 # ── The actual fix pass ───────────────────────────────────────────────
 
 
+def merge_split_compounds(
+    segs: list[dict[str, Any]],
+    lookup: dict[str, set[str]],
+) -> int:
+    """Find runs of adjacent single-kanji segs whose concatenation is a
+    JMdict headword, and merge them into one seg. Fixes LLM tokenization
+    errors like `{t:"今"},{t:"月"}` → `{t:"今月", r:"こんげつ"}` (which would
+    otherwise render as いま+つき, the per-character kun readings).
+
+    Uses longest-match-greedy from each position: at position i, extends
+    the run as long as concatenating the next single-kanji seg still
+    results in a JMdict-known compound, then merges that whole run.
+
+    Returns the number of merges performed. Mutates `segs` in place.
+    """
+    def is_single_kanji_seg(s: dict[str, Any]) -> bool:
+        t = s.get("t", "")
+        return len(t) == 1 and bool(t) and has_kanji(t)
+
+    merges = 0
+    i = 0
+    while i < len(segs):
+        if not is_single_kanji_seg(segs[i]):
+            i += 1
+            continue
+        # Find the longest run [i..end] whose concat is in JMdict.
+        concat = segs[i]["t"]
+        best_end = i  # inclusive; best_end == i means "no merge from here"
+        j = i + 1
+        while j < len(segs) and is_single_kanji_seg(segs[j]):
+            concat += segs[j]["t"]
+            if concat in lookup:
+                best_end = j
+            j += 1
+        if best_end > i:
+            merged_t = "".join(s["t"] for s in segs[i:best_end + 1])
+            readings = lookup.get(merged_t, set())
+            new_seg: dict[str, Any] = {"t": merged_t}
+            if readings:
+                # Prefer a reading that matches the concatenation of the
+                # per-seg kanji hints if any — otherwise alphabetical first.
+                new_seg["r"] = sorted(readings)[0]
+            # Promote the first non-null gloss from the contributing segs.
+            for s in segs[i:best_end + 1]:
+                g = s.get("g")
+                if g:
+                    new_seg["g"] = g
+                    break
+            segs[i:best_end + 1] = [new_seg]
+            merges += 1
+            i += 1  # advance past the new merged seg
+        else:
+            i += 1
+    return merges
+
+
 def fix_segs_readings(
     segs: list[dict[str, Any]],
     lookup: dict[str, set[str]],
@@ -255,6 +311,12 @@ def fix_segs_readings(
     often stuffs a bogus gloss-as-reading).
     """
     changed = 0
+
+    # Step 0 — fold any runs of split-apart single-kanji segs back into
+    # their JMdict compound form. Must run BEFORE the per-seg reading
+    # cascade so the new merged seg gets its canonical reading picked up
+    # by rule 1. Each merge counts as one change.
+    changed += merge_split_compounds(segs, lookup)
 
     # Pre-compute the sentence-level tokenization once (expensive for long
     # sentences, but we do it once per sentence — not per seg).
