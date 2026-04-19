@@ -460,6 +460,19 @@ def parse_jmdict(path: Path, allowed_kanji: set[str], vocab_whitelist: set[str])
         jp_kanji = [c for c in jp if is_kanji(c)]
         if jp_kanji and any(c not in allowed_kanji for c in jp_kanji):
             continue
+        # Drop kana-only entries: katakana loanwords (ワイン, ワープロ, ...) and
+        # hiragana-only particles/interjections (あっさり, ... ). This app is a
+        # kanji-learning tool; a word with no kanji has no place to study.
+        if not jp_kanji:
+            continue
+        # Drop archaic ateji entries for foreign place names / loan words
+        # (寿府 = Geneva, 倫敦 = London, 亜米利加 = America, 巴里 = Paris, ...).
+        # These words have kanji but the canonical reading is pure katakana
+        # because the kanji are just phonetic approximations of a foreign
+        # word — a modern native speaker writes them in plain katakana. No
+        # learning value for a kanji-study app.
+        if reb and all(0x30A0 <= ord(c) <= 0x30FF or c == "ー" for c in reb):
+            continue
 
         meanings: list[str] = []
         meaning_pos: list[str] = []
@@ -809,6 +822,15 @@ def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = Fal
     # triples used by the practice-morph UI. We prefer words that contain the
     # kanji AND have at least one Tatoeba example, and we try to pick words with
     # different readings so a learner hears more than one pronunciation.
+    def _example_jp(ex: dict) -> str:
+        """Pull the Japanese sentence from an example. Tatoeba stored it in
+        `jp`; LLM examples omit that field to save bundle size — reconstruct
+        it from the segs (which concatenate to the original sentence)."""
+        jp = ex.get("jp")
+        if jp:
+            return str(jp)
+        return "".join(str(s.get("t", "")) for s in (ex.get("segs") or []))
+
     for ch, k in kanji.items():
         seen_readings: set[str] = set()
         picked: list[dict[str, str]] = []
@@ -827,7 +849,7 @@ def build(data_dir: Path, out_path: Path, *, validate: bool, use_llm: bool = Fal
                 "wordJp": w.jp,
                 "wordReading": w.reading,
                 "wordMeaning": pick_gloss(w, "") or "",
-                "exJp": str(ex.get("jp", "")),
+                "exJp": _example_jp(ex),
                 "exEn": str(ex.get("en", "")),
             })
         # Second pass: fill in with any remaining words if we still have slots.

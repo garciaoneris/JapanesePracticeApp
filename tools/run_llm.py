@@ -29,25 +29,36 @@ import httpx
 import orjson
 from tqdm.asyncio import tqdm as atqdm
 
+# Windows default stdout is cp1252 which chokes on Japanese characters. Force
+# UTF-8 so progress output and error summaries never hit UnicodeEncodeError.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+
 # Reuse parsers + dataclasses from the existing build script.
 sys.path.insert(0, str(Path(__file__).parent))
 from build_bundle import parse_jmdict, parse_kanjidic  # noqa: E402
+from fix_readings import (  # noqa: E402
+    build_jmdict_reading_lookup,
+    fix_segs_readings,
+)
 from llm_generate import (  # noqa: E402
     allowed_kanji_for_word,
     generate_word_example,
 )
 
-CACHE_PATH = Path("tools/_data/llm_word_cache.jsonl")
+DEFAULT_CACHE_PATH = Path("tools/_data/llm_word_cache.jsonl")
 
 
-def load_cache() -> dict[str, dict[str, object]]:
+def load_cache(cache_path: Path) -> dict[str, dict[str, object]]:
     """Read the JSONL cache into a dict keyed by word id. Malformed lines
     are skipped with a warning so a partial crash during write can't brick
     the whole cache."""
     out: dict[str, dict[str, object]] = {}
-    if not CACHE_PATH.exists():
+    if not cache_path.exists():
         return out
-    with CACHE_PATH.open("rb") as f:
+    with cache_path.open("rb") as f:
         for ln, raw in enumerate(f, 1):
             if not raw.strip():
                 continue
@@ -62,10 +73,10 @@ def load_cache() -> dict[str, dict[str, object]]:
     return out
 
 
-def append_cache(row: dict[str, object]) -> None:
+def append_cache(cache_path: Path, row: dict[str, object]) -> None:
     """Append one JSON object as a single line, then fsync. Survives Ctrl+C."""
-    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with CACHE_PATH.open("ab") as f:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("ab") as f:
         f.write(orjson.dumps(row))
         f.write(b"\n")
         f.flush()
@@ -81,6 +92,7 @@ async def run(
     concurrency: int,
     limit: int | None,
     data_dir: Path,
+    cache_path: Path,
 ) -> None:
     print(f"Parsing KANJIDIC2 and JMdict from {data_dir}…")
     t0 = time.perf_counter()
@@ -91,8 +103,18 @@ async def run(
         f"in {time.perf_counter() - t0:.1f}s"
     )
 
-    cache = load_cache()
-    print(f"Cache at {CACHE_PATH} has {len(cache)} entries")
+    # Build the JMdict surface→reading lookup once up-front. Each new cache
+    # entry is routed through fix_segs_readings() before being written, so
+    # readings are corrected at generation time (not as a separate post-pass).
+    t_lookup = time.perf_counter()
+    jm_lookup = build_jmdict_reading_lookup(data_dir / "JMdict_e")
+    print(
+        f"  built reading lookup with {len(jm_lookup)} surfaces "
+        f"in {time.perf_counter() - t_lookup:.1f}s"
+    )
+
+    cache = load_cache(cache_path)
+    print(f"Cache at {cache_path} has {len(cache)} entries")
 
     pending = [w for w in words.values() if w.id not in cache]
     if limit is not None:
@@ -137,12 +159,24 @@ async def run(
                     failures.append((w.id, w.jp, str(exc)))
                     return
 
-                append_cache({
+                segs = [s.model_dump(exclude_none=True) for s in ex.segs]
+                # Cross-check every kanji-containing seg against JMdict + do
+                # sentence-context fugashi analysis. Highest-signal rule first:
+                # if a seg IS the target word, use JMdict's canonical reading
+                # for that exact entry (w.reading). Mutates segs in place.
+                fix_segs_readings(
+                    segs,
+                    jm_lookup,
+                    word_jp=w.jp,
+                    word_reading=w.reading,
+                    sentence_jp=ex.sentence_jp,
+                )
+                append_cache(cache_path, {
                     "id": w.id,
                     "jp": w.jp,
                     "sentence_jp": ex.sentence_jp,
                     "sentence_en": ex.sentence_en,
-                    "segs": [s.model_dump(exclude_none=True) for s in ex.segs],
+                    "segs": segs,
                 })
 
         tasks = [asyncio.create_task(worker(w)) for w in pending]
@@ -187,6 +221,12 @@ def main() -> None:
         type=Path,
         default=Path("tools/_data"),
     )
+    ap.add_argument(
+        "--cache",
+        type=Path,
+        default=DEFAULT_CACHE_PATH,
+        help="Path to the JSONL cache. Use a separate path for isolated test runs.",
+    )
     args = ap.parse_args()
 
     model = args.model or (
@@ -201,6 +241,7 @@ def main() -> None:
                 concurrency=args.concurrency,
                 limit=args.limit,
                 data_dir=args.data_dir,
+                cache_path=args.cache,
             )
         )
     except KeyboardInterrupt:
