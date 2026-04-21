@@ -130,9 +130,9 @@
   const REF_STROKE_VB = 5;
 
   // Taper profile, expressed as multipliers of the reference stroke width:
-  // quick drop from 1.5× to 1.0× over the first 20% of the stroke, then a
+  // quick drop from 1.2× to 1.0× over the first 20% of the stroke, then a
   // slow glide from 1.0× to 0.5× over the remainder.
-  const TAPER_START_MULT = 1.5;
+  const TAPER_START_MULT = 1.2;
   const TAPER_KNEE_MULT = 1.0;
   const TAPER_END_MULT = 0.5;
   const TAPER_KNEE_T = 0.2;

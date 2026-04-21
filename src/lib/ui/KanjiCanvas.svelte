@@ -210,13 +210,13 @@
     // Progress along the expected stroke at the segment midpoint, clamped.
     const midProg = Math.min(1, (cumLen + segLen / 2) / (expectedLen || 1));
     cumLen += segLen;
-    // Multipliers of the reference SVG stroke width: 1.5×→1.0× over the first
+    // Multipliers of the reference SVG stroke width: 1.2×→1.0× over the first
     // 20%, then 1.0×→0.5× over the rest.
     const REF_STROKE_VB = 5;
     const base = (REF_STROKE_VB * canvas.width) / VB;
     const KNEE_T = 0.2;
     const mult = midProg < KNEE_T
-      ? 1.5 + (1.0 - 1.5) * (midProg / KNEE_T)
+      ? 1.2 + (1.0 - 1.2) * (midProg / KNEE_T)
       : 1.0 + (0.5 - 1.0) * ((midProg - KNEE_T) / (1 - KNEE_T));
     const w = base * mult;
     ctx.strokeStyle = '#ff7a59';
