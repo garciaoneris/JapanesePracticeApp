@@ -117,24 +117,76 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
-  function drawStroke(pts: Point[], color: string) {
+  function strokeLength(pts: Point[]): number {
+    let s = 0;
+    for (let i = 1; i < pts.length; i++) {
+      s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    }
+    return s;
+  }
+
+  // Reference SVG stroke width in VB units. Chosen a touch thicker than the
+  // KanjiVG default (3) so the guide reads as a real brush stroke.
+  const REF_STROKE_VB = 5;
+
+  // Taper profile, expressed as multipliers of the reference stroke width:
+  // quick drop from 1.5× to 1.0× over the first 20% of the stroke, then a
+  // slow glide from 1.0× to 0.5× over the remainder.
+  const TAPER_START_MULT = 1.5;
+  const TAPER_KNEE_MULT = 1.0;
+  const TAPER_END_MULT = 0.5;
+  const TAPER_KNEE_T = 0.2;
+
+  function refStrokePx(): number {
+    return REF_STROKE_VB * (canvas?.width ?? VB) / VB;
+  }
+
+  function taperWidth(progress: number): number {
+    const base = refStrokePx();
+    const p = Math.min(1, Math.max(0, progress));
+    const mult = p < TAPER_KNEE_T
+      ? TAPER_START_MULT + (TAPER_KNEE_MULT - TAPER_START_MULT) * (p / TAPER_KNEE_T)
+      : TAPER_KNEE_MULT + (TAPER_END_MULT - TAPER_KNEE_MULT) * ((p - TAPER_KNEE_T) / (1 - TAPER_KNEE_T));
+    return base * mult;
+  }
+
+  /** Draw a single user stroke with a calligraphy taper: thicker at the start,
+   *  thinner at the end. Progress is keyed off the reference path's length
+   *  (so uneven drawing speed doesn't distort the taper); falls back to the
+   *  user stroke's own length when no ref is available. */
+  function drawStroke(pts: Point[], color: string, expectedLen?: number) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
     const sy = canvas.height / VB;
+    const totalLen = expectedLen && expectedLen > 0 ? expectedLen : strokeLength(pts) || 1;
     ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(4, canvas.width / 26);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x * sx, pts[0].y * sy);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * sx, pts[i].y * sy);
-    ctx.stroke();
+    let cum = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1];
+      const b = pts[i];
+      const seg = Math.hypot(b.x - a.x, b.y - a.y);
+      const midProg = (cum + seg / 2) / totalLen;
+      cum += seg;
+      ctx.lineWidth = taperWidth(midProg);
+      ctx.beginPath();
+      ctx.moveTo(a.x * sx, a.y * sy);
+      ctx.lineTo(b.x * sx, b.y * sy);
+      ctx.stroke();
+    }
   }
 
   function redraw() {
     clearCanvas();
-    for (const s of userStrokes) drawStroke(s, '#ff7a59');
-    if (drawing && currentPoints.length) drawStroke(currentPoints, '#ff7a59');
+    for (let i = 0; i < userStrokes.length; i++) {
+      const ref = refPaths[i];
+      drawStroke(userStrokes[i], '#ff7a59', ref ? ref.getTotalLength() : undefined);
+    }
+    if (drawing && currentPoints.length) {
+      const ref = refPaths[userStrokes.length];
+      drawStroke(currentPoints, '#ff7a59', ref ? ref.getTotalLength() : undefined);
+    }
   }
 
   function canvasPoint(e: PointerEvent): Point {
@@ -322,7 +374,15 @@
           counted += 1;
         }
       }
-      distSum += counted > 0 ? local / counted : 45;
+      const meanD = counted > 0 ? local / counted : 45;
+      // Endpoint penalty: explicitly weight the gap between where the user
+      // started/finished the stroke and where the reference starts/ends.
+      // Weight matches a single interior sample so it visibly shows up in the
+      // score without dominating overall shape matching.
+      const startD = Math.hypot(us[0].x - ref[0].x, us[0].y - ref[0].y);
+      const endD = Math.hypot(us[RESAMPLE_N - 1].x - ref[RESAMPLE_N - 1].x, us[RESAMPLE_N - 1].y - ref[RESAMPLE_N - 1].y);
+      const endpointPenalty = (startD + endD) * 0.5;
+      distSum += meanD + endpointPenalty * 0.5;
     }
 
     const avg = distSum / N;
@@ -416,7 +476,9 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.lineWidth = Math.max(4, canvas.width / 26);
+        // Morph target weight matches the SVG reference stroke so the user's
+        // tapered stroke smoothly settles into a uniform reference line.
+        const uniformW = refStrokePx();
 
         for (const [u, r] of pairs) {
           const lerp = (a: number, b: number) => a + (b - a) * e;
@@ -425,14 +487,24 @@
           const cb = Math.round(lerp(89, 234));
           ctx.strokeStyle = `rgb(${cr}, ${cg}, ${cb})`;
 
-          ctx.beginPath();
+          // Taper fades into the reference's uniform weight as morph progresses.
+          let prevX = 0, prevY = 0;
           for (let i = 0; i < u.length; i++) {
             const x = u[i].x + (r[i].x - u[i].x) * e;
             const y = u[i].y + (r[i].y - u[i].y) * e;
-            if (i === 0) ctx.moveTo(x * sx, y * sy);
-            else ctx.lineTo(x * sx, y * sy);
+            if (i === 0) {
+              prevX = x; prevY = y;
+              continue;
+            }
+            const midProg = (i - 0.5) / (u.length - 1);
+            const tapered = taperWidth(midProg);
+            ctx.lineWidth = tapered + (uniformW - tapered) * e;
+            ctx.beginPath();
+            ctx.moveTo(prevX * sx, prevY * sy);
+            ctx.lineTo(x * sx, y * sy);
+            ctx.stroke();
+            prevX = x; prevY = y;
           }
-          ctx.stroke();
         }
 
         if (t < 1) requestAnimationFrame(frame);
@@ -492,6 +564,12 @@
       svgEl.style.pointerEvents = 'none';
       svgEl.style.transition = 'opacity 0.2s';
       refPaths = Array.from(svgEl.querySelectorAll('path'));
+      refPaths.forEach((p) => {
+        p.setAttribute('stroke-width', String(REF_STROKE_VB));
+        p.setAttribute('stroke-linecap', 'round');
+        p.setAttribute('stroke-linejoin', 'round');
+        p.setAttribute('fill', 'none');
+      });
     }
 
     ctx = canvas.getContext('2d');

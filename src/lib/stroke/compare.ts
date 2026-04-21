@@ -62,6 +62,8 @@ export interface StrokeScore {
   meanDistance: number;
   directionDot: number;
   lengthRatio: number;
+  startDistance: number;
+  endDistance: number;
 }
 
 export function scoreStroke(user: Point[], reference: Point[]): StrokeScore {
@@ -83,6 +85,15 @@ export function scoreStroke(user: Point[], reference: Point[]): StrokeScore {
   const lr = length(r) || 1;
   const lengthRatio = lu / lr;
 
-  const pass = directionDot > 0.7 && meanDistance < 0.15 && lengthRatio > 0.5 && lengthRatio < 2.0;
-  return { pass, meanDistance, directionDot, lengthRatio };
+  const startDistance = Math.hypot(u[0].x - r[0].x, u[0].y - r[0].y);
+  const endDistance = Math.hypot(u[N - 1].x - r[N - 1].x, u[N - 1].y - r[N - 1].y);
+
+  const pass =
+    directionDot > 0.7 &&
+    meanDistance < 0.15 &&
+    lengthRatio > 0.5 &&
+    lengthRatio < 2.0 &&
+    startDistance < 0.22 &&
+    endDistance < 0.22;
+  return { pass, meanDistance, directionDot, lengthRatio, startDistance, endDistance };
 }

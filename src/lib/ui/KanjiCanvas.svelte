@@ -29,6 +29,8 @@
   let feedback = $state<string>('');
   let drawing = false;
   let userPoints: Point[] = [];
+  let cumLen = 0;
+  let expectedLen = 0;
   let animTimer: number | null = null;
   let animating = $state(false);
   let ready = $state(false);
@@ -190,6 +192,10 @@
     drawing = true;
     canvas.setPointerCapture(e.pointerId);
     userPoints = [canvasPoint(e)];
+    cumLen = 0;
+    const ref = refPaths[currentStroke];
+    // Fall back to a viewbox-scale length so solo drags still taper sensibly.
+    expectedLen = ref ? ref.getTotalLength() || VB : VB;
     feedback = '';
   }
 
@@ -200,8 +206,21 @@
     userPoints.push(p);
     const sx = canvas.width / VB;
     const sy = canvas.height / VB;
+    const segLen = Math.hypot(p.x - prev.x, p.y - prev.y);
+    // Progress along the expected stroke at the segment midpoint, clamped.
+    const midProg = Math.min(1, (cumLen + segLen / 2) / (expectedLen || 1));
+    cumLen += segLen;
+    // Multipliers of the reference SVG stroke width: 1.5×→1.0× over the first
+    // 20%, then 1.0×→0.5× over the rest.
+    const REF_STROKE_VB = 5;
+    const base = (REF_STROKE_VB * canvas.width) / VB;
+    const KNEE_T = 0.2;
+    const mult = midProg < KNEE_T
+      ? 1.5 + (1.0 - 1.5) * (midProg / KNEE_T)
+      : 1.0 + (0.5 - 1.0) * ((midProg - KNEE_T) / (1 - KNEE_T));
+    const w = base * mult;
     ctx.strokeStyle = '#ff7a59';
-    ctx.lineWidth = Math.max(4, canvas.width / 28);
+    ctx.lineWidth = w;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
@@ -229,8 +248,14 @@
         feedback = '✓ complete!';
         onComplete?.();
       }
-    } else {
+    } else if (score.startDistance >= 0.22) {
+      feedback = `retry — start closer to the stroke's start point`;
+    } else if (score.endDistance >= 0.22) {
+      feedback = `retry — finish closer to the stroke's end point`;
+    } else if (score.directionDot <= 0.7) {
       feedback = `retry — try going in the right direction`;
+    } else {
+      feedback = `retry — follow the stroke more closely`;
     }
   }
 
