@@ -66,6 +66,9 @@
   let goalState = $state<GoalState>({ goalMinutes: 10, todayMinutes: 0, todayDate: '' });
   let streakDays = $state(0);
   let displayName = $state('');
+  const DOW_KANJI = ['日', '月', '火', '水', '木', '金', '土'] as const;
+  const dowKanji = DOW_KANJI[new Date().getDay()];
+
   let kotdChar = $state('');
   let dueCount = $state(0);
 
@@ -199,7 +202,7 @@
   <!-- ── Top bar ──────────────────────────────────────────────── -->
   <header class="topbar">
     <div class="brand">
-      <div class="logo jp-serif">日</div>
+      <div class="logo jp-serif">{dowKanji}</div>
       <div>
         <div class="date">{headerDate}</div>
         <div class="greeting">{greeting}</div>
