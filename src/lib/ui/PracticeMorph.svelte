@@ -165,123 +165,74 @@
     return refStrokePx() * 1.1;
   }
 
-  // ── Brush stroke rendering ──────────────────────────────────────────
-  // Strategy: build a smooth Path2D once per stroke, then stroke it in
-  // four layered passes — wide faint halo, outer ink, dense core, and
-  // two thin bristle-splay passes shifted perpendicular to the stroke
-  // direction. Gives the darker-center-soft-edge + frayed-bristle look
-  // of real brush-ink without needing a texture asset.
+  // ── Stroke rendering ────────────────────────────────────────────────
+  // Plain solid stroke with a subtle paper drop shadow. Input polyline
+  // is pre-smoothed via two Chaikin passes so noisy/jagged pointer
+  // input comes out as a clean curve — at the final quadratic-midpoint
+  // draw the stroke reads as one continuous line.
 
-  /** Build a Path2D that walks the point list via quadratic curves
-   *  through segment midpoints — the standard smoothing trick for noisy
-   *  pointer input. Expects pixel-space points. */
-  function buildSmoothPath(pxPts: Point[]): Path2D {
-    const path = new Path2D();
-    if (pxPts.length < 2) return path;
-    if (pxPts.length === 2) {
-      path.moveTo(pxPts[0].x, pxPts[0].y);
-      path.lineTo(pxPts[1].x, pxPts[1].y);
-      return path;
+  /** One pass of Chaikin's corner-cutting algorithm: for each adjacent
+   *  pair (a, b), replace with two new points at 1/4 and 3/4 of the
+   *  line between them. Endpoints preserved. Iterating this 2-3 times
+   *  rounds off any sharp direction changes in a noisy polyline while
+   *  staying faithful to the overall shape. */
+  function chaikinPass(pts: Point[]): Point[] {
+    if (pts.length < 3) return pts.slice();
+    const out: Point[] = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
+      out.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
     }
-    path.moveTo(pxPts[0].x, pxPts[0].y);
-    for (let i = 1; i < pxPts.length - 1; i++) {
-      const midX = (pxPts[i].x + pxPts[i + 1].x) / 2;
-      const midY = (pxPts[i].y + pxPts[i + 1].y) / 2;
-      path.quadraticCurveTo(pxPts[i].x, pxPts[i].y, midX, midY);
-    }
-    const last = pxPts[pxPts.length - 1];
-    path.lineTo(last.x, last.y);
-    return path;
+    out.push(pts[pts.length - 1]);
+    return out;
+  }
+
+  function smoothInput(pts: Point[]): Point[] {
+    // Two passes = ~4× point density with corner cuts; enough to
+    // flatten the kind of jitter that comes from unsteady fingers or
+    // an iPad trackpad without rounding off intentional direction
+    // changes in the stroke.
+    return chaikinPass(chaikinPass(pts));
   }
 
   function drawStroke(pts: Point[], color: string) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
     const sy = canvas.height / VB;
-    const w = userStrokeWidthPx();
 
-    const pxPts: Point[] = pts.map((p) => ({ x: p.x * sx, y: p.y * sy }));
-    const mainPath = buildSmoothPath(pxPts);
+    // Pre-smooth the noisy polyline, THEN apply quadratic midpoint
+    // curves for the final render — two layers of smoothing stack
+    // cleanly.
+    const sm = smoothInput(pts);
 
-    // Offscreen canvas so the destination-out end-fade can only affect
-    // *this* stroke's pixels, not others on the main canvas.
-    const off = document.createElement('canvas');
-    off.width = canvas.width;
-    off.height = canvas.height;
-    const octx = off.getContext('2d');
-    if (!octx) return;
-
-    // Plain solid stroke.
-    octx.lineCap = 'round';
-    octx.lineJoin = 'round';
-    octx.lineWidth = w;
-    octx.strokeStyle = color;
-    octx.stroke(mainPath);
-
-    // Fade the last 30% of the stroke along its *arc length*. A
-    // linear gradient in cartesian space would cut across curved or
-    // angled strokes at the wrong place — it projects the alpha
-    // along the straight first→last line, not along the path itself.
-    // Walking the path in N small arc-length steps and erasing each
-    // step with alpha = (t - 0.7) / 0.3 keeps the fade tied to where
-    // the learner actually ended the stroke, regardless of curvature.
-    const cum: number[] = [0];
-    for (let i = 1; i < pxPts.length; i++) {
-      cum.push(cum[i - 1] + Math.hypot(pxPts[i].x - pxPts[i - 1].x, pxPts[i].y - pxPts[i - 1].y));
-    }
-    const total = cum[cum.length - 1] || 1;
-    const pointAt = (t: number): { x: number; y: number } => {
-      const target = Math.max(0, Math.min(1, t)) * total;
-      for (let i = 1; i < cum.length; i++) {
-        if (cum[i] >= target) {
-          const a = pxPts[i - 1];
-          const b = pxPts[i];
-          const segLen = cum[i] - cum[i - 1] || 1;
-          const segT = (target - cum[i - 1]) / segLen;
-          return { x: a.x + (b.x - a.x) * segT, y: a.y + (b.y - a.y) * segT };
-        }
-      }
-      const lastPt = pxPts[pxPts.length - 1];
-      return { x: lastPt.x, y: lastPt.y };
-    };
-
-    // Stroke the fade mask as short segments WITH BUTT linecap so
-    // adjacent segments meet edge-to-edge without overlapping. Each
-    // segment uses its own linear gradient aligned with the segment's
-    // actual direction (p0→p1), so a pixel is only ever erased once
-    // with the correct arc-length alpha — no cumulative erasure.
-    octx.globalCompositeOperation = 'destination-out';
-    octx.lineCap = 'butt';
-    octx.lineJoin = 'bevel';
-    octx.lineWidth = w * 1.3; // a shade wider than the core so butt
-    // joins cover the full stroke width, round-caps at the tip too.
-
-    const N = 40;
-    const FADE_START = 0.7;
-    for (let i = 1; i <= N; i++) {
-      const tPrev = (i - 1) / N;
-      const t = i / N;
-      const aPrev = Math.max(0, (tPrev - FADE_START) / (1 - FADE_START));
-      const aCur = Math.max(0, (t - FADE_START) / (1 - FADE_START));
-      if (aPrev === 0 && aCur === 0) continue;
-      const p0 = pointAt(tPrev);
-      const p1 = pointAt(t);
-      const grad = octx.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
-      grad.addColorStop(0, `rgba(0, 0, 0, ${aPrev})`);
-      grad.addColorStop(1, `rgba(0, 0, 0, ${aCur})`);
-      octx.strokeStyle = grad;
-      octx.beginPath();
-      octx.moveTo(p0.x, p0.y);
-      octx.lineTo(p1.x, p1.y);
-      octx.stroke();
-    }
-
-    // Blit to the main canvas with a subtle paper drop shadow.
     ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = userStrokeWidthPx();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    // Subtle paper drop shadow.
     ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
     ctx.shadowBlur = 3;
+    ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 2;
-    ctx.drawImage(off, 0, 0);
+
+    ctx.beginPath();
+    if (sm.length === 2) {
+      ctx.moveTo(sm[0].x * sx, sm[0].y * sy);
+      ctx.lineTo(sm[1].x * sx, sm[1].y * sy);
+    } else {
+      ctx.moveTo(sm[0].x * sx, sm[0].y * sy);
+      for (let i = 1; i < sm.length - 1; i++) {
+        const midX = (sm[i].x + sm[i + 1].x) / 2;
+        const midY = (sm[i].y + sm[i + 1].y) / 2;
+        ctx.quadraticCurveTo(sm[i].x * sx, sm[i].y * sy, midX * sx, midY * sy);
+      }
+      const last = sm[sm.length - 1];
+      ctx.lineTo(last.x * sx, last.y * sy);
+    }
+    ctx.stroke();
     ctx.restore();
   }
 
