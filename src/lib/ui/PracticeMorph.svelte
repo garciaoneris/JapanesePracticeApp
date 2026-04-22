@@ -59,23 +59,8 @@
     const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     return v || fallback;
   }
-  /** Cache the resolved accent color keyed by the active theme so
-   *  drawStroke doesn't force a getComputedStyle on every pointermove.
-   *  `getComputedStyle` is expensive on iPad — hitting it 60-120× a
-   *  second was breaking up the drawing flow into chunks. */
-  let _accentCache = '';
-  let _accentCacheTheme = '';
-  const accentColor = (): string => {
-    const theme = typeof document !== 'undefined'
-      ? document.documentElement.getAttribute('data-theme') ?? ''
-      : '';
-    if (theme !== _accentCacheTheme || !_accentCache) {
-      _accentCacheTheme = theme;
-      _accentCache = cssVar('--accent', '#E76A3A');
-    }
-    return _accentCache;
-  };
-  const inkColor = () => cssVar('--ink-2', '#5F4E3A');
+  const accentColor = () => cssVar('--accent', '#E76A3A');
+  const inkColor    = () => cssVar('--ink-2', '#5F4E3A');
 
   /** Parse `#rgb` / `#rrggbb` / `rgb(r, g, b)` → [r, g, b]. Used by the morph
    *  animation which has to lerp in RGB space. Returns null on anything else
@@ -166,68 +151,79 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
+  function strokeLength(pts: Point[]): number {
+    let s = 0;
+    for (let i = 1; i < pts.length; i++) {
+      s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    }
+    return s;
+  }
+
   // Reference SVG stroke width in VB units. Chosen a touch thicker than the
   // KanjiVG default (3) so the guide reads as a real brush stroke.
   const REF_STROKE_VB = 5;
+
+  // Taper profile, expressed as multipliers of the reference stroke width:
+  // quick drop from 1.2× to 1.0× over the first 20% of the stroke, then a
+  // slow glide from 1.0× to 0.5× over the remainder.
+  const TAPER_START_MULT = 1.2;
+  const TAPER_KNEE_MULT = 1.0;
+  const TAPER_END_MULT = 0.5;
+  const TAPER_KNEE_T = 0.2;
 
   function refStrokePx(): number {
     return REF_STROKE_VB * (canvas?.width ?? VB) / VB;
   }
 
-  /** Constant-width stroke in canvas pixels — 1.1× the reference so the
-   *  user's drawing sits confidently on top of the guide. */
-  function userStrokeWidthPx(): number {
-    return refStrokePx() * 1.1;
+  function taperWidth(progress: number): number {
+    const base = refStrokePx();
+    const p = Math.min(1, Math.max(0, progress));
+    const mult = p < TAPER_KNEE_T
+      ? TAPER_START_MULT + (TAPER_KNEE_MULT - TAPER_START_MULT) * (p / TAPER_KNEE_T)
+      : TAPER_KNEE_MULT + (TAPER_END_MULT - TAPER_KNEE_MULT) * ((p - TAPER_KNEE_T) / (1 - TAPER_KNEE_T));
+    return base * mult;
   }
 
-  // ── Stroke rendering ────────────────────────────────────────────────
-  // Plain polyline, constant width, round caps. Nothing else — no
-  // smoothing, no drop shadow, no offscreen compositing. All the
-  // variants I tried (Chaikin smoothing, quadratic midpoints, fade
-  // masks, edge feathers, bristle splay, turbulence) felt laggy or
-  // broke up the line on iPad, so we're back to the minimum.
-  function drawStroke(pts: Point[], color: string) {
+  /** Draw a single user stroke with a calligraphy taper: thicker at the start,
+   *  thinner at the end. Progress is keyed off the reference path's length
+   *  (so uneven drawing speed doesn't distort the taper); falls back to the
+   *  user stroke's own length when no ref is available. */
+  function drawStroke(pts: Point[], color: string, expectedLen?: number) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
     const sy = canvas.height / VB;
+    const totalLen = expectedLen && expectedLen > 0 ? expectedLen : strokeLength(pts) || 1;
     ctx.strokeStyle = color;
-    ctx.lineWidth = userStrokeWidthPx();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x * sx, pts[0].y * sy);
+    let cum = 0;
     for (let i = 1; i < pts.length; i++) {
-      ctx.lineTo(pts[i].x * sx, pts[i].y * sy);
+      const a = pts[i - 1];
+      const b = pts[i];
+      const seg = Math.hypot(b.x - a.x, b.y - a.y);
+      const midProg = (cum + seg / 2) / totalLen;
+      cum += seg;
+      ctx.lineWidth = taperWidth(midProg);
+      ctx.beginPath();
+      ctx.moveTo(a.x * sx, a.y * sy);
+      ctx.lineTo(b.x * sx, b.y * sy);
+      ctx.stroke();
     }
-    ctx.stroke();
   }
 
-  /** Append-only paint of a single segment between two points. Used by
-   *  onMove so a pointermove only costs ONE ctx.stroke(), not a full-
-   *  canvas clear + re-stroke of every prior stroke. Huge iPad win at
-   *  60-120 Hz pointer sampling. */
-  function drawSegment(a: Point, b: Point, color: string) {
-    if (!ctx) return;
-    const sx = canvas.width / VB;
-    const sy = canvas.height / VB;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = userStrokeWidthPx();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    ctx.moveTo(a.x * sx, a.y * sy);
-    ctx.lineTo(b.x * sx, b.y * sy);
-    ctx.stroke();
-  }
-
-  /** Full canvas refresh — clear + re-paint every committed stroke.
-   *  Only called on reset / new-kanji / pointerdown; NOT per move. */
   function redraw() {
     clearCanvas();
+    // Keep upstream's length-keyed taper (drawStroke's third arg), but pull
+    // the color from the active theme so strokes re-theme on palette swap.
     const c = accentColor();
-    for (const s of userStrokes) drawStroke(s, c);
-    // In-progress stroke is appended to canvas incrementally via
-    // drawSegment in onMove — no need to re-stroke it here.
+    for (let i = 0; i < userStrokes.length; i++) {
+      const ref = refPaths[i];
+      drawStroke(userStrokes[i], c, ref ? ref.getTotalLength() : undefined);
+    }
+    if (drawing && currentPoints.length) {
+      const ref = refPaths[userStrokes.length];
+      drawStroke(currentPoints, c, ref ? ref.getTotalLength() : undefined);
+    }
   }
 
   function canvasPoint(e: PointerEvent): Point {
@@ -342,18 +338,17 @@
     // Hide reference strokes on first touch.
     if (refVisible) hideRef();
     drawing = true;
+    // Wrap setPointerCapture: it can throw on non-trusted events (e.g. synthetic
+    // pointer events from automation harnesses). If it fails we still capture
+    // points via the move handler; we just miss out on implicit capture.
     try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     currentPoints = [canvasPoint(e)];
   }
 
   function onMove(e: PointerEvent) {
     if (!drawing) return;
-    const p = canvasPoint(e);
-    const prev = currentPoints[currentPoints.length - 1];
-    currentPoints.push(p);
-    // Incremental draw — paint only the new segment on top of the
-    // committed pixels instead of clearing + re-stroking everything.
-    if (prev) drawSegment(prev, p, accentColor());
+    currentPoints.push(canvasPoint(e));
+    redraw();
   }
 
   function onUp() {
@@ -363,8 +358,7 @@
       userStrokes = [...userStrokes, currentPoints];
     }
     currentPoints = [];
-    // Skip the post-commit redraw — the stroke's pixels are already
-    // on the canvas from the incremental onMove draws.
+    redraw();
 
     // Auto-morph once the user has drawn enough strokes.
     if (
@@ -540,12 +534,9 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        // Both user strokes and the reference are now constant-width;
-        // lerp between them so the thicker user weight settles into
-        // the slightly thinner reference width as the morph completes.
-        const startW = userStrokeWidthPx();
-        const endW = refStrokePx();
-        ctx.lineWidth = startW + (endW - startW) * e;
+        // Morph target weight matches the SVG reference stroke so the user's
+        // tapered stroke smoothly settles into a uniform reference line.
+        const uniformW = refStrokePx();
 
         for (const [u, r] of pairs) {
           const lerp = (a: number, b: number) => a + (b - a) * e;
@@ -554,14 +545,24 @@
           const cb = Math.round(lerp(startRGB[2], endRGB[2]));
           ctx.strokeStyle = `rgb(${cr}, ${cg}, ${cb})`;
 
-          ctx.beginPath();
+          // Taper fades into the reference's uniform weight as morph progresses.
+          let prevX = 0, prevY = 0;
           for (let i = 0; i < u.length; i++) {
             const x = u[i].x + (r[i].x - u[i].x) * e;
             const y = u[i].y + (r[i].y - u[i].y) * e;
-            if (i === 0) ctx.moveTo(x * sx, y * sy);
-            else ctx.lineTo(x * sx, y * sy);
+            if (i === 0) {
+              prevX = x; prevY = y;
+              continue;
+            }
+            const midProg = (i - 0.5) / (u.length - 1);
+            const tapered = taperWidth(midProg);
+            ctx.lineWidth = tapered + (uniformW - tapered) * e;
+            ctx.beginPath();
+            ctx.moveTo(prevX * sx, prevY * sy);
+            ctx.lineTo(x * sx, y * sy);
+            ctx.stroke();
+            prevX = x; prevY = y;
           }
-          ctx.stroke();
         }
 
         if (t < 1) requestAnimationFrame(frame);
@@ -620,12 +621,6 @@
       svgEl.style.opacity = hideRefOnMount ? '0' : '1';
       svgEl.style.pointerEvents = 'none';
       svgEl.style.transition = 'opacity 0.2s';
-      // Inject the ink-bleed filter into the SVG's <defs>. feTurbulence
-      // generates a fractal noise pattern; feDisplacementMap uses that
-      // noise to shove each path pixel sideways by a few pixels,
-      // producing the frayed-bristle edge of a real brush stroke.
-      const NS = 'http://www.w3.org/2000/svg';
-      const defs = document.createElementNS(NS, 'defs');
       refPaths = Array.from(svgEl.querySelectorAll('path'));
       refPaths.forEach((p) => {
         p.setAttribute('stroke-width', String(REF_STROKE_VB));
@@ -754,11 +749,7 @@
     align-items: baseline;
     justify-content: space-between;
     gap: 0.5rem;
-    margin: 0 auto 0.75rem;
-    /* Constrain to the canvas width so on pages that don't wrap
-       PracticeMorph in their own max-width container (FillKanji),
-       the hint text doesn't fly off to the viewport edges. */
-    max-width: 420px;
+    margin-bottom: 0.75rem;
     padding: 0 0.25rem;
     color: var(--ink-2);
     font-size: 0.9rem;

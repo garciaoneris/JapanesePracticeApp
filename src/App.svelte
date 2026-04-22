@@ -11,7 +11,6 @@
   import Complete from './routes/Complete.svelte';
   import NotFound from './routes/NotFound.svelte';
   import XpToast from './lib/ui/XpToast.svelte';
-  import TabBar from './lib/ui/TabBar.svelte';
   import { onMount } from 'svelte';
   import { ensureBundleLoaded } from './lib/data/bundle';
   import { syncNow, getToken } from './lib/data/sync';
@@ -73,13 +72,6 @@
 <!-- Global XP-gain toast. Listens to notifyXpGain events from anywhere
      in the app and floats a "+N XP" chip near the corner per award. -->
 <XpToast />
-
-<!-- Persistent bottom navigation. Shown on every screen so switching
-     modes is always one tap away. Hidden while the bundle is still
-     loading to avoid a flash against the loading state. -->
-{#if !loading && !error}
-  <TabBar />
-{/if}
 
 <style>
   .center {
