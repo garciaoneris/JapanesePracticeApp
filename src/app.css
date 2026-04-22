@@ -130,7 +130,10 @@ html, body, #app {
 
 body {
   padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
+  /* Bottom padding reserves space for the fixed TabBar (64px height +
+     12px gap + 12px safety) + the iPad home-indicator safe area.
+     Without this, screen content scrolls under the nav bar. */
+  padding-bottom: calc(88px + env(safe-area-inset-bottom));
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }

@@ -151,79 +151,96 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
-  function strokeLength(pts: Point[]): number {
-    let s = 0;
-    for (let i = 1; i < pts.length; i++) {
-      s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    }
-    return s;
-  }
-
   // Reference SVG stroke width in VB units. Chosen a touch thicker than the
   // KanjiVG default (3) so the guide reads as a real brush stroke.
   const REF_STROKE_VB = 5;
-
-  // Taper profile, expressed as multipliers of the reference stroke width:
-  // quick drop from 1.2× to 1.0× over the first 20% of the stroke, then a
-  // slow glide from 1.0× to 0.5× over the remainder.
-  const TAPER_START_MULT = 1.2;
-  const TAPER_KNEE_MULT = 1.0;
-  const TAPER_END_MULT = 0.5;
-  const TAPER_KNEE_T = 0.2;
 
   function refStrokePx(): number {
     return REF_STROKE_VB * (canvas?.width ?? VB) / VB;
   }
 
-  function taperWidth(progress: number): number {
-    const base = refStrokePx();
-    const p = Math.min(1, Math.max(0, progress));
-    const mult = p < TAPER_KNEE_T
-      ? TAPER_START_MULT + (TAPER_KNEE_MULT - TAPER_START_MULT) * (p / TAPER_KNEE_T)
-      : TAPER_KNEE_MULT + (TAPER_END_MULT - TAPER_KNEE_MULT) * ((p - TAPER_KNEE_T) / (1 - TAPER_KNEE_T));
-    return base * mult;
+  /** Constant-width stroke in canvas pixels — 1.1× the reference so the
+   *  user's drawing sits confidently on top of the guide. */
+  function userStrokeWidthPx(): number {
+    return refStrokePx() * 1.1;
   }
 
-  /** Draw a single user stroke with a calligraphy taper: thicker at the start,
-   *  thinner at the end. Progress is keyed off the reference path's length
-   *  (so uneven drawing speed doesn't distort the taper); falls back to the
-   *  user stroke's own length when no ref is available. */
-  function drawStroke(pts: Point[], color: string, expectedLen?: number) {
+  // ── Stroke rendering ────────────────────────────────────────────────
+  // Plain solid stroke with a subtle paper drop shadow. Input polyline
+  // is pre-smoothed via two Chaikin passes so noisy/jagged pointer
+  // input comes out as a clean curve — at the final quadratic-midpoint
+  // draw the stroke reads as one continuous line.
+
+  /** One pass of Chaikin's corner-cutting algorithm: for each adjacent
+   *  pair (a, b), replace with two new points at 1/4 and 3/4 of the
+   *  line between them. Endpoints preserved. Iterating this 2-3 times
+   *  rounds off any sharp direction changes in a noisy polyline while
+   *  staying faithful to the overall shape. */
+  function chaikinPass(pts: Point[]): Point[] {
+    if (pts.length < 3) return pts.slice();
+    const out: Point[] = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
+      out.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
+    }
+    out.push(pts[pts.length - 1]);
+    return out;
+  }
+
+  function smoothInput(pts: Point[]): Point[] {
+    // Two passes = ~4× point density with corner cuts; enough to
+    // flatten the kind of jitter that comes from unsteady fingers or
+    // an iPad trackpad without rounding off intentional direction
+    // changes in the stroke.
+    return chaikinPass(chaikinPass(pts));
+  }
+
+  function drawStroke(pts: Point[], color: string) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
     const sy = canvas.height / VB;
-    const totalLen = expectedLen && expectedLen > 0 ? expectedLen : strokeLength(pts) || 1;
+
+    // Pre-smooth the noisy polyline, THEN apply quadratic midpoint
+    // curves for the final render — two layers of smoothing stack
+    // cleanly.
+    const sm = smoothInput(pts);
+
+    ctx.save();
     ctx.strokeStyle = color;
+    ctx.lineWidth = userStrokeWidthPx();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    let cum = 0;
-    for (let i = 1; i < pts.length; i++) {
-      const a = pts[i - 1];
-      const b = pts[i];
-      const seg = Math.hypot(b.x - a.x, b.y - a.y);
-      const midProg = (cum + seg / 2) / totalLen;
-      cum += seg;
-      ctx.lineWidth = taperWidth(midProg);
-      ctx.beginPath();
-      ctx.moveTo(a.x * sx, a.y * sy);
-      ctx.lineTo(b.x * sx, b.y * sy);
-      ctx.stroke();
+    // Subtle paper drop shadow.
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
+    ctx.shadowBlur = 3;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 2;
+
+    ctx.beginPath();
+    if (sm.length === 2) {
+      ctx.moveTo(sm[0].x * sx, sm[0].y * sy);
+      ctx.lineTo(sm[1].x * sx, sm[1].y * sy);
+    } else {
+      ctx.moveTo(sm[0].x * sx, sm[0].y * sy);
+      for (let i = 1; i < sm.length - 1; i++) {
+        const midX = (sm[i].x + sm[i + 1].x) / 2;
+        const midY = (sm[i].y + sm[i + 1].y) / 2;
+        ctx.quadraticCurveTo(sm[i].x * sx, sm[i].y * sy, midX * sx, midY * sy);
+      }
+      const last = sm[sm.length - 1];
+      ctx.lineTo(last.x * sx, last.y * sy);
     }
+    ctx.stroke();
+    ctx.restore();
   }
 
   function redraw() {
     clearCanvas();
-    // Keep upstream's length-keyed taper (drawStroke's third arg), but pull
-    // the color from the active theme so strokes re-theme on palette swap.
     const c = accentColor();
-    for (let i = 0; i < userStrokes.length; i++) {
-      const ref = refPaths[i];
-      drawStroke(userStrokes[i], c, ref ? ref.getTotalLength() : undefined);
-    }
-    if (drawing && currentPoints.length) {
-      const ref = refPaths[userStrokes.length];
-      drawStroke(currentPoints, c, ref ? ref.getTotalLength() : undefined);
-    }
+    for (const s of userStrokes) drawStroke(s, c);
+    if (drawing && currentPoints.length) drawStroke(currentPoints, c);
   }
 
   function canvasPoint(e: PointerEvent): Point {
@@ -534,9 +551,12 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        // Morph target weight matches the SVG reference stroke so the user's
-        // tapered stroke smoothly settles into a uniform reference line.
-        const uniformW = refStrokePx();
+        // Both user strokes and the reference are now constant-width;
+        // lerp between them so the thicker user weight settles into
+        // the slightly thinner reference width as the morph completes.
+        const startW = userStrokeWidthPx();
+        const endW = refStrokePx();
+        ctx.lineWidth = startW + (endW - startW) * e;
 
         for (const [u, r] of pairs) {
           const lerp = (a: number, b: number) => a + (b - a) * e;
@@ -545,24 +565,14 @@
           const cb = Math.round(lerp(startRGB[2], endRGB[2]));
           ctx.strokeStyle = `rgb(${cr}, ${cg}, ${cb})`;
 
-          // Taper fades into the reference's uniform weight as morph progresses.
-          let prevX = 0, prevY = 0;
+          ctx.beginPath();
           for (let i = 0; i < u.length; i++) {
             const x = u[i].x + (r[i].x - u[i].x) * e;
             const y = u[i].y + (r[i].y - u[i].y) * e;
-            if (i === 0) {
-              prevX = x; prevY = y;
-              continue;
-            }
-            const midProg = (i - 0.5) / (u.length - 1);
-            const tapered = taperWidth(midProg);
-            ctx.lineWidth = tapered + (uniformW - tapered) * e;
-            ctx.beginPath();
-            ctx.moveTo(prevX * sx, prevY * sy);
-            ctx.lineTo(x * sx, y * sy);
-            ctx.stroke();
-            prevX = x; prevY = y;
+            if (i === 0) ctx.moveTo(x * sx, y * sy);
+            else ctx.lineTo(x * sx, y * sy);
           }
+          ctx.stroke();
         }
 
         if (t < 1) requestAnimationFrame(frame);
@@ -621,6 +631,12 @@
       svgEl.style.opacity = hideRefOnMount ? '0' : '1';
       svgEl.style.pointerEvents = 'none';
       svgEl.style.transition = 'opacity 0.2s';
+      // Inject the ink-bleed filter into the SVG's <defs>. feTurbulence
+      // generates a fractal noise pattern; feDisplacementMap uses that
+      // noise to shove each path pixel sideways by a few pixels,
+      // producing the frayed-bristle edge of a real brush stroke.
+      const NS = 'http://www.w3.org/2000/svg';
+      const defs = document.createElementNS(NS, 'defs');
       refPaths = Array.from(svgEl.querySelectorAll('path'));
       refPaths.forEach((p) => {
         p.setAttribute('stroke-width', String(REF_STROKE_VB));
@@ -749,7 +765,11 @@
     align-items: baseline;
     justify-content: space-between;
     gap: 0.5rem;
-    margin-bottom: 0.75rem;
+    margin: 0 auto 0.75rem;
+    /* Constrain to the canvas width so on pages that don't wrap
+       PracticeMorph in their own max-width container (FillKanji),
+       the hint text doesn't fly off to the viewport edges. */
+    max-width: 420px;
     padding: 0 0.25rem;
     color: var(--ink-2);
     font-size: 0.9rem;
@@ -805,6 +825,9 @@
     /* Default stroke color for the reference SVG. Paths inject with
        `stroke="currentColor"` so this flows through. */
     color: var(--ink-2);
+    /* Subtle drop shadow on the reference strokes — matches the
+       brush-on-paper feel of the user's canvas strokes. */
+    filter: drop-shadow(0 2px 1.5px rgba(0, 0, 0, 0.22));
   }
   canvas {
     position: absolute;
