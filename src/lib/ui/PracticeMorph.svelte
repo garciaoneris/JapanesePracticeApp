@@ -104,10 +104,6 @@
   // ── reactive state ─────────────────────────────────────────────────
   // refPaths must be $state so $derived(requiredCount) recomputes after onMount.
   let refPaths = $state<SVGPathElement[]>([]);
-  // Unique filter id per PracticeMorph instance. SVG filter urls are
-  // document-scoped, so two practice canvases on the same page would
-  // clobber each other without this.
-  const inkFilterId = `ink-bleed-${Math.random().toString(36).slice(2, 9)}`;
   let userStrokes = $state<Point[][]>([]);
   let drawing = $state(false);
   let currentPoints: Point[] = [];
@@ -198,6 +194,54 @@
     return path;
   }
 
+  /** Number of bristle hairs per stroke. Density-biased so more end
+   *  before the stroke finishes than survive to the tail — mimics a
+   *  brush shedding ink over its path. */
+  const BRISTLE_COUNT = 18;
+
+  /** Sample a point on the smoothed polyline at t ∈ [0,1] along with
+   *  its local unit-tangent. Used to offset bristles perpendicular to
+   *  stroke direction. */
+  function pointAt(
+    pxPts: Point[],
+    cum: number[],
+    total: number,
+    t: number,
+  ): { x: number; y: number; nx: number; ny: number } {
+    const target = Math.max(0, Math.min(1, t)) * total;
+    for (let i = 1; i < cum.length; i++) {
+      if (cum[i] >= target) {
+        const a = pxPts[i - 1];
+        const b = pxPts[i];
+        const segLen = cum[i] - cum[i - 1] || 1;
+        const segT = (target - cum[i - 1]) / segLen;
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len;
+        dy /= len;
+        return {
+          x: a.x + (b.x - a.x) * segT,
+          y: a.y + (b.y - a.y) * segT,
+          // Perpendicular = (-tangent.y, tangent.x).
+          nx: -dy,
+          ny: dx,
+        };
+      }
+    }
+    const last = pxPts[pxPts.length - 1];
+    return { x: last.x, y: last.y, nx: 0, ny: 1 };
+  }
+
+  /** Deterministic pseudo-random in [0, 1). Keyed by (seed, i, k) so
+   *  the same stroke redraws with the same bristle pattern on every
+   *  frame — no flicker during morph or reveal — while different
+   *  strokes get different bristle arrangements. */
+  function rnd(seed: number, i: number, k: number): number {
+    const v = Math.sin(seed + i * 91.7 + k * 31.3) * 43758.5453;
+    return v - Math.floor(v);
+  }
+
   function drawStroke(pts: Point[], color: string) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
@@ -207,28 +251,75 @@
     const pxPts: Point[] = pts.map((p) => ({ x: p.x * sx, y: p.y * sy }));
     const mainPath = buildSmoothPath(pxPts);
 
+    // Pre-compute cumulative arc length so we can walk t ∈ [0, 1] along
+    // the stroke and land on the right segment.
+    const cum: number[] = [0];
+    for (let i = 1; i < pxPts.length; i++) {
+      cum.push(
+        cum[i - 1] + Math.hypot(pxPts[i].x - pxPts[i - 1].x, pxPts[i].y - pxPts[i - 1].y),
+      );
+    }
+    const total = cum[cum.length - 1] || 1;
+
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // Pass 1 — very faint outer halo. Just enough soft-edge bleed to
-    // not read as a geometric line. Previous (wider, higher-alpha) halo
-    // made the strokes look smoky — the reference is mostly solid ink.
-    ctx.globalAlpha = 0.06;
-    ctx.lineWidth = w * 1.4;
-    ctx.stroke(mainPath);
-
-    // Pass 2 — dense core at full opacity with the paper drop shadow.
-    // This is the stroke the user sees; the halo just softens the edge.
-    ctx.globalAlpha = 1;
+    // Core stroke — solid ink body with the paper drop shadow.
     ctx.lineWidth = w;
     ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
     ctx.shadowBlur = 3;
-    ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 2;
     ctx.stroke(mainPath);
+    ctx.shadowColor = 'transparent';
 
+    // Bristle mask. Each bristle is a thin semi-transparent polyline
+    // parallel to the main stroke, offset perpendicular so it sits
+    // along or just beyond the core edge. Earlier version kept bristles
+    // inside the core radius, which meant they were painted over by
+    // the solid body — invisible. Now they extend out to ±~w so they
+    // read as real streaks alongside the stroke.
+    //
+    // Density falloff: bristle.tEnd is distributed as rnd^1.8, which
+    // skews heavily toward the start — most bristles terminate in the
+    // first third of the stroke, a few reach further, only a sparse
+    // tail survives to the end. That's the "brush loses ink over the
+    // length of a stroke" effect.
+    const seed = pts[0].x * 73.17 + pts[0].y * 41.31 + pts.length * 7.13;
+    const SAMPLES_PER_BRISTLE = 24;
+
+    for (let i = 0; i < BRISTLE_COUNT; i++) {
+      // Perpendicular offset: push bristles out to ±~w so their
+      // centerline sits near (or just past) the core edge. Bristles
+      // biased away from dead-center so the pattern doesn't bunch up.
+      const biasSign = rnd(seed, i, 0) < 0.5 ? -1 : 1;
+      const biasMag = 0.45 + rnd(seed, i, 1) * 0.55; // [0.45, 1.0]
+      const offset = biasSign * biasMag * w;
+
+      // Density-weighted end point, with a small floor so tiny "stub"
+      // bristles at the stroke start still register visually.
+      const r = rnd(seed, i, 2);
+      const tEnd = Math.max(0.06, Math.pow(r, 1.8));
+
+      // Per-bristle width + alpha jitter. Width 0.22-0.36 w so bristles
+      // read as thin hairs; alpha 0.28-0.46 so they're visible against
+      // the paper without overpowering the core.
+      ctx.lineWidth = w * (0.22 + rnd(seed, i, 4) * 0.14);
+      ctx.globalAlpha = 0.28 + rnd(seed, i, 3) * 0.18;
+
+      ctx.beginPath();
+      for (let s = 0; s <= SAMPLES_PER_BRISTLE; s++) {
+        const t = (s / SAMPLES_PER_BRISTLE) * tEnd;
+        const p = pointAt(pxPts, cum, total, t);
+        const px = p.x + p.nx * offset;
+        const py = p.y + p.ny * offset;
+        if (s === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
@@ -633,27 +724,12 @@
       // producing the frayed-bristle edge of a real brush stroke.
       const NS = 'http://www.w3.org/2000/svg';
       const defs = document.createElementNS(NS, 'defs');
-      // Very low frequency + tiny displacement = slow, organic waves on
-      // the stroke edges rather than high-frequency bristle noise.
-      // Previous 0.9/1.8 settings were creating visible static along
-      // every pixel — the reference image has mostly clean edges with
-      // just a touch of organic softness, so we match that.
-      defs.innerHTML =
-        `<filter id="${inkFilterId}" x="-5%" y="-5%" width="110%" height="110%">` +
-          `<feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="1" seed="7" result="noise"/>` +
-          `<feDisplacementMap in="SourceGraphic" in2="noise" scale="0.8"/>` +
-        `</filter>`;
-      svgEl.insertBefore(defs, svgEl.firstChild);
-
       refPaths = Array.from(svgEl.querySelectorAll('path'));
       refPaths.forEach((p) => {
         p.setAttribute('stroke-width', String(REF_STROKE_VB));
         p.setAttribute('stroke-linecap', 'round');
         p.setAttribute('stroke-linejoin', 'round');
         p.setAttribute('fill', 'none');
-        // Per-path filter so the stroke-number markers (injected later
-        // as a sibling <g>) don't get distorted by the displacement.
-        p.setAttribute('filter', `url(#${inkFilterId})`);
       });
     }
 
