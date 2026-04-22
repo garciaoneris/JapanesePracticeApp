@@ -202,56 +202,39 @@
 
     const pxPts: Point[] = pts.map((p) => ({ x: p.x * sx, y: p.y * sy }));
     const mainPath = buildSmoothPath(pxPts);
-    const [r, g, b] = hexToRgb(color) ?? [231, 106, 58];
 
-    // Render to an offscreen canvas so the end-fade (painted in
-    // destination-out below) can only erase *this* stroke's pixels —
-    // not any of the other user strokes already on the main canvas.
+    // Offscreen canvas so the destination-out end-fade can only affect
+    // *this* stroke's pixels, not others on the main canvas.
     const off = document.createElement('canvas');
     off.width = canvas.width;
     off.height = canvas.height;
     const octx = off.getContext('2d');
     if (!octx) return;
+
+    // Plain solid stroke.
     octx.lineCap = 'round';
     octx.lineJoin = 'round';
-
-    // Edge feather — three stacked strokes of decreasing width and
-    // increasing alpha. The widest lays down a soft translucent halo
-    // on the stroke's perpendicular (top/bottom) edges, the middle
-    // bridges to the core, and the narrowest core is fully opaque.
-    // Net effect: a stroke that's solid at its centerline and fades
-    // to 0% at the upper/lower edges instead of a hard geometric cut.
-    octx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.22)`;
-    octx.lineWidth = w * 1.35;
+    octx.lineWidth = w;
+    octx.strokeStyle = color;
     octx.stroke(mainPath);
 
-    octx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.55)`;
-    octx.lineWidth = w * 1.05;
-    octx.stroke(mainPath);
-
-    octx.strokeStyle = `rgba(${r}, ${g}, ${b}, 1)`;
-    octx.lineWidth = w * 0.7;
-    octx.stroke(mainPath);
-
-    // End fade. A linear gradient along the stroke's bounding line
-    // (first→last point) with alpha=0 through t≈0.66, ramping up to
-    // alpha=1 at t=1, painted in destination-out mode so the last
-    // third of the stroke is progressively erased toward the tail.
-    // The body start stays fully opaque — only the end fades.
+    // Fade the last 10% of the stroke to transparent. Linear gradient
+    // along first→last point with alpha 0 through t=0.9, ramping to
+    // alpha 1 at t=1, painted in destination-out so only the tail is
+    // progressively erased.
     const first = pxPts[0];
     const last = pxPts[pxPts.length - 1];
     const fade = octx.createLinearGradient(first.x, first.y, last.x, last.y);
     fade.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    fade.addColorStop(0.66, 'rgba(0, 0, 0, 0)');
+    fade.addColorStop(0.9, 'rgba(0, 0, 0, 0)');
     fade.addColorStop(1, 'rgba(0, 0, 0, 1)');
     octx.globalCompositeOperation = 'destination-out';
     octx.strokeStyle = fade;
-    octx.lineWidth = w * 1.6; // a touch wider than the halo so the
-    // erase fully covers the edge feather, not just the core.
+    octx.lineWidth = w * 1.2; // wider than core so the erase covers
+    // the round-cap endpoints too.
     octx.stroke(mainPath);
 
-    // Blit to the main canvas with a subtle paper drop shadow — the
-    // shadow applies to the entire composited stroke uniformly.
+    // Blit to the main canvas with a subtle paper drop shadow.
     ctx.save();
     ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
     ctx.shadowBlur = 3;
