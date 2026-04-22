@@ -194,40 +194,6 @@
     return path;
   }
 
-  /** Sample a point on the smoothed polyline at t ∈ [0,1]. Used by
-   *  the per-segment renderer that fades stroke alpha at both ends. */
-  function pointAt(
-    pxPts: Point[],
-    cum: number[],
-    total: number,
-    t: number,
-  ): { x: number; y: number } {
-    const target = Math.max(0, Math.min(1, t)) * total;
-    for (let i = 1; i < cum.length; i++) {
-      if (cum[i] >= target) {
-        const a = pxPts[i - 1];
-        const b = pxPts[i];
-        const segLen = cum[i] - cum[i - 1] || 1;
-        const segT = (target - cum[i - 1]) / segLen;
-        return {
-          x: a.x + (b.x - a.x) * segT,
-          y: a.y + (b.y - a.y) * segT,
-        };
-      }
-    }
-    const last = pxPts[pxPts.length - 1];
-    return { x: last.x, y: last.y };
-  }
-
-  /** Alpha ramp for the stroke-length fade: 0 at t=0, ramps linearly
-   *  to 1 at t=1/3, stays 1 through t=2/3, then ramps back down to 0
-   *  at t=1. Middle third is solid, outer thirds fade to transparent. */
-  function alphaAtT(t: number): number {
-    if (t <= 1 / 3) return Math.max(0, t * 3);
-    if (t >= 2 / 3) return Math.max(0, (1 - t) * 3);
-    return 1;
-  }
-
   function drawStroke(pts: Point[], color: string) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
@@ -235,52 +201,62 @@
     const w = userStrokeWidthPx();
 
     const pxPts: Point[] = pts.map((p) => ({ x: p.x * sx, y: p.y * sy }));
+    const mainPath = buildSmoothPath(pxPts);
+    const [r, g, b] = hexToRgb(color) ?? [231, 106, 58];
 
-    // Pre-compute cumulative arc length so we can walk t ∈ [0, 1] at
-    // regular intervals and land on the right segment.
-    const cum: number[] = [0];
-    for (let i = 1; i < pxPts.length; i++) {
-      cum.push(
-        cum[i - 1] + Math.hypot(pxPts[i].x - pxPts[i - 1].x, pxPts[i].y - pxPts[i - 1].y),
-      );
-    }
-    const total = cum[cum.length - 1] || 1;
+    // Render to an offscreen canvas so the end-fade (painted in
+    // destination-out below) can only erase *this* stroke's pixels —
+    // not any of the other user strokes already on the main canvas.
+    const off = document.createElement('canvas');
+    off.width = canvas.width;
+    off.height = canvas.height;
+    const octx = off.getContext('2d');
+    if (!octx) return;
+    octx.lineCap = 'round';
+    octx.lineJoin = 'round';
 
+    // Edge feather — three stacked strokes of decreasing width and
+    // increasing alpha. The widest lays down a soft translucent halo
+    // on the stroke's perpendicular (top/bottom) edges, the middle
+    // bridges to the core, and the narrowest core is fully opaque.
+    // Net effect: a stroke that's solid at its centerline and fades
+    // to 0% at the upper/lower edges instead of a hard geometric cut.
+    octx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.22)`;
+    octx.lineWidth = w * 1.35;
+    octx.stroke(mainPath);
+
+    octx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.55)`;
+    octx.lineWidth = w * 1.05;
+    octx.stroke(mainPath);
+
+    octx.strokeStyle = `rgba(${r}, ${g}, ${b}, 1)`;
+    octx.lineWidth = w * 0.7;
+    octx.stroke(mainPath);
+
+    // End fade. A linear gradient along the stroke's bounding line
+    // (first→last point) with alpha=0 through t≈0.66, ramping up to
+    // alpha=1 at t=1, painted in destination-out mode so the last
+    // third of the stroke is progressively erased toward the tail.
+    // The body start stays fully opaque — only the end fades.
+    const first = pxPts[0];
+    const last = pxPts[pxPts.length - 1];
+    const fade = octx.createLinearGradient(first.x, first.y, last.x, last.y);
+    fade.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    fade.addColorStop(0.66, 'rgba(0, 0, 0, 0)');
+    fade.addColorStop(1, 'rgba(0, 0, 0, 1)');
+    octx.globalCompositeOperation = 'destination-out';
+    octx.strokeStyle = fade;
+    octx.lineWidth = w * 1.6; // a touch wider than the halo so the
+    // erase fully covers the edge feather, not just the core.
+    octx.stroke(mainPath);
+
+    // Blit to the main canvas with a subtle paper drop shadow — the
+    // shadow applies to the entire composited stroke uniformly.
     ctx.save();
-    ctx.strokeStyle = color;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = w;
-    // Paper drop shadow under every sub-segment so the ink feels
-    // anchored. Cheap enough at canvas scale (no compositor layers).
     ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
     ctx.shadowBlur = 3;
     ctx.shadowOffsetY = 2;
-
-    // Render the stroke as N short segments spanning the full arc. Each
-    // segment's alpha is picked by alphaAtT(mid) so the first third
-    // fades in, middle third is solid, last third fades out. Segments
-    // overlap slightly (round linecaps) so the alpha transitions read
-    // as a smooth gradient rather than visible banding.
-    const SEGMENTS = 56;
-    let prev = pointAt(pxPts, cum, total, 0);
-    for (let i = 1; i <= SEGMENTS; i++) {
-      const t = i / SEGMENTS;
-      const midT = (t + (i - 1) / SEGMENTS) / 2;
-      const a = alphaAtT(midT);
-      if (a <= 0.01) {
-        prev = pointAt(pxPts, cum, total, t);
-        continue;
-      }
-      const cur = pointAt(pxPts, cum, total, t);
-      ctx.globalAlpha = a;
-      ctx.beginPath();
-      ctx.moveTo(prev.x, prev.y);
-      ctx.lineTo(cur.x, cur.y);
-      ctx.stroke();
-      prev = cur;
-    }
-    ctx.globalAlpha = 1;
+    ctx.drawImage(off, 0, 0);
     ctx.restore();
   }
 
