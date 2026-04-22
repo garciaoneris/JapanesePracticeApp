@@ -62,22 +62,20 @@
   .tile.tier-gold {
     background: var(--tile-gold);
     color: #3A2810;
-    border: 1.5px solid rgba(230, 160, 40, 0.5);
-    box-shadow:
-      0 6px 16px rgba(230, 160, 40, 0.3),
-      inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    border: 1.5px solid rgba(230, 160, 40, 0.7);
+    /* Drop-shadow intentionally omitted — on a grid of 500+ tiles
+       (L3 filter) every shadow was its own compositor layer. A
+       stronger border gets the same "this tile is special" read
+       without the per-tile paint cost. */
   }
   .tile.tier-platinum {
     background: var(--tile-platinum);
     /* --ink goes dark on Washi/Sakura (readable over the pastel lilac
        gradient) and near-white on Neon (readable over the dark
-       semi-transparent platinum layer). Hardcoding a dark purple here
-       left Neon platinum glyphs almost invisible. */
+       semi-transparent platinum layer). */
     color: var(--ink);
-    border: 1.5px solid rgba(120, 100, 200, 0.5);
-    box-shadow:
-      0 6px 18px rgba(124, 92, 255, 0.3),
-      inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    border: 1.5px solid rgba(120, 100, 200, 0.7);
+    /* Same perf note as .tier-gold. */
   }
   .tile.tier-review {
     background: color-mix(in oklab, var(--rose) 12%, var(--surface));
@@ -111,16 +109,18 @@
     font-weight: 800;
     padding: 2px 5px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.5);
+    /* Was `rgba(255,255,255,0.5) + backdrop-filter: blur(4px)`. At 500+
+       tiles on the L3 filter that was 500+ live blur filters the iPad
+       compositor had to maintain — the #1 source of scroll jank.
+       A solid semi-transparent fill gets the same "floating chip"
+       look with zero compositor cost. */
+    background: rgba(255, 255, 255, 0.82);
     color: inherit;
-    backdrop-filter: blur(4px);
     line-height: 1.2;
-    /* Explicit z-index keeps the score badge above the shimmer overlay;
-       both are absolutely positioned so DOM order alone isn't enough. */
     z-index: 1;
   }
   :global([data-theme='neon']) .score {
-    background: rgba(0, 0, 0, 0.35);
+    background: rgba(0, 0, 0, 0.55);
     color: #fff;
   }
   .new-dot {

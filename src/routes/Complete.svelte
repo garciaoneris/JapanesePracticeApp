@@ -276,9 +276,9 @@
   .stat {
     padding: 12px 8px;
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.75);
     border: 1px solid var(--border);
-    backdrop-filter: blur(8px);
+    /* backdrop-filter dropped for iPad perf. */
     text-align: center;
   }
   :global([data-theme='neon']) .stat {

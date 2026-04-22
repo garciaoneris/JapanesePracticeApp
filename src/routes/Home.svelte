@@ -471,12 +471,13 @@
     gap: 6px;
     padding: 6px 10px;
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.72);
     border: 1px solid var(--border);
     font-weight: 800;
     font-size: 13px;
     color: var(--ink);
-    backdrop-filter: blur(8px);
+    /* backdrop-filter dropped for iPad compositor budget — solid fill
+       covers what we need over the hero-grad. */
   }
   .bloom-icon { color: var(--accent-2); display: flex; }
   :global([data-theme='neon']) .level-pill { background: rgba(255, 255, 255, 0.1); }
@@ -766,7 +767,15 @@
     grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
     gap: 8px;
   }
-  .grid-cell { text-decoration: none; }
+  .grid-cell {
+    text-decoration: none;
+    /* Off-screen tiles skip paint, layout, and style — huge scroll
+       win on L3 where the filter can produce 500+ tiles. The intrinsic
+       size hint matches the tile aspect so the scrollbar doesn't jump
+       as cells cross the viewport boundary. */
+    content-visibility: auto;
+    contain-intrinsic-size: 82px 104px;
+  }
   .grid-cell :global(.tile) { width: 100% !important; aspect-ratio: 1 / 1; height: auto !important; }
 
   @media (max-width: 480px) {

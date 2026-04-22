@@ -410,7 +410,7 @@
     z-index: 1;
     margin-top: 12px;
     padding: 10px 14px;
-    background: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.78);
     border: 1px solid var(--border);
     border-radius: 14px;
     font-size: 13px;
@@ -418,7 +418,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    backdrop-filter: blur(8px);
+    /* backdrop-filter dropped for iPad perf. */
   }
   :global([data-theme='neon']) .encourage {
     background: rgba(0, 0, 0, 0.35);
