@@ -218,21 +218,63 @@
     octx.strokeStyle = color;
     octx.stroke(mainPath);
 
-    // Fade the last 30% of the stroke to transparent. Linear gradient
-    // along first→last point with alpha 0 through t=0.7, ramping to
-    // alpha 1 at t=1, painted in destination-out so only the tail is
-    // progressively erased.
-    const first = pxPts[0];
-    const last = pxPts[pxPts.length - 1];
-    const fade = octx.createLinearGradient(first.x, first.y, last.x, last.y);
-    fade.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    fade.addColorStop(0.7, 'rgba(0, 0, 0, 0)');
-    fade.addColorStop(1, 'rgba(0, 0, 0, 1)');
+    // Fade the last 30% of the stroke along its *arc length*. A
+    // linear gradient in cartesian space would cut across curved or
+    // angled strokes at the wrong place — it projects the alpha
+    // along the straight first→last line, not along the path itself.
+    // Walking the path in N small arc-length steps and erasing each
+    // step with alpha = (t - 0.7) / 0.3 keeps the fade tied to where
+    // the learner actually ended the stroke, regardless of curvature.
+    const cum: number[] = [0];
+    for (let i = 1; i < pxPts.length; i++) {
+      cum.push(cum[i - 1] + Math.hypot(pxPts[i].x - pxPts[i - 1].x, pxPts[i].y - pxPts[i - 1].y));
+    }
+    const total = cum[cum.length - 1] || 1;
+    const pointAt = (t: number): { x: number; y: number } => {
+      const target = Math.max(0, Math.min(1, t)) * total;
+      for (let i = 1; i < cum.length; i++) {
+        if (cum[i] >= target) {
+          const a = pxPts[i - 1];
+          const b = pxPts[i];
+          const segLen = cum[i] - cum[i - 1] || 1;
+          const segT = (target - cum[i - 1]) / segLen;
+          return { x: a.x + (b.x - a.x) * segT, y: a.y + (b.y - a.y) * segT };
+        }
+      }
+      const lastPt = pxPts[pxPts.length - 1];
+      return { x: lastPt.x, y: lastPt.y };
+    };
+
+    // Stroke the fade mask as short segments WITH BUTT linecap so
+    // adjacent segments meet edge-to-edge without overlapping. Each
+    // segment uses its own linear gradient aligned with the segment's
+    // actual direction (p0→p1), so a pixel is only ever erased once
+    // with the correct arc-length alpha — no cumulative erasure.
     octx.globalCompositeOperation = 'destination-out';
-    octx.strokeStyle = fade;
-    octx.lineWidth = w * 1.2; // wider than core so the erase covers
-    // the round-cap endpoints too.
-    octx.stroke(mainPath);
+    octx.lineCap = 'butt';
+    octx.lineJoin = 'bevel';
+    octx.lineWidth = w * 1.3; // a shade wider than the core so butt
+    // joins cover the full stroke width, round-caps at the tip too.
+
+    const N = 40;
+    const FADE_START = 0.7;
+    for (let i = 1; i <= N; i++) {
+      const tPrev = (i - 1) / N;
+      const t = i / N;
+      const aPrev = Math.max(0, (tPrev - FADE_START) / (1 - FADE_START));
+      const aCur = Math.max(0, (t - FADE_START) / (1 - FADE_START));
+      if (aPrev === 0 && aCur === 0) continue;
+      const p0 = pointAt(tPrev);
+      const p1 = pointAt(t);
+      const grad = octx.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
+      grad.addColorStop(0, `rgba(0, 0, 0, ${aPrev})`);
+      grad.addColorStop(1, `rgba(0, 0, 0, ${aCur})`);
+      octx.strokeStyle = grad;
+      octx.beginPath();
+      octx.moveTo(p0.x, p0.y);
+      octx.lineTo(p1.x, p1.y);
+      octx.stroke();
+    }
 
     // Blit to the main canvas with a subtle paper drop shadow.
     ctx.save();
