@@ -104,6 +104,10 @@
   // ── reactive state ─────────────────────────────────────────────────
   // refPaths must be $state so $derived(requiredCount) recomputes after onMount.
   let refPaths = $state<SVGPathElement[]>([]);
+  // Unique filter id per PracticeMorph instance. SVG filter urls are
+  // document-scoped, so two practice canvases on the same page would
+  // clobber each other without this.
+  const inkFilterId = `ink-bleed-${Math.random().toString(36).slice(2, 9)}`;
   let userStrokes = $state<Point[][]>([]);
   let drawing = $state(false);
   let currentPoints: Point[] = [];
@@ -165,53 +169,107 @@
     return refStrokePx() * 1.1;
   }
 
-  /** Draw a smoothed user stroke. No taper — the previous calligraphy-
-   *  taper attempt looked unnatural. Smoothing (quadratic curves through
-   *  segment midpoints, Catmull-Rom style) eliminates the jitter from
-   *  raw pointer input, and a subtle drop shadow gives the "brush on
-   *  paper" feel. */
+  // ── Brush stroke rendering ──────────────────────────────────────────
+  // Strategy: build a smooth Path2D once per stroke, then stroke it in
+  // four layered passes — wide faint halo, outer ink, dense core, and
+  // two thin bristle-splay passes shifted perpendicular to the stroke
+  // direction. Gives the darker-center-soft-edge + frayed-bristle look
+  // of real brush-ink without needing a texture asset.
+
+  /** Build a Path2D that walks the point list via quadratic curves
+   *  through segment midpoints — the standard smoothing trick for noisy
+   *  pointer input. Expects pixel-space points. */
+  function buildSmoothPath(pxPts: Point[]): Path2D {
+    const path = new Path2D();
+    if (pxPts.length < 2) return path;
+    if (pxPts.length === 2) {
+      path.moveTo(pxPts[0].x, pxPts[0].y);
+      path.lineTo(pxPts[1].x, pxPts[1].y);
+      return path;
+    }
+    path.moveTo(pxPts[0].x, pxPts[0].y);
+    for (let i = 1; i < pxPts.length - 1; i++) {
+      const midX = (pxPts[i].x + pxPts[i + 1].x) / 2;
+      const midY = (pxPts[i].y + pxPts[i + 1].y) / 2;
+      path.quadraticCurveTo(pxPts[i].x, pxPts[i].y, midX, midY);
+    }
+    const last = pxPts[pxPts.length - 1];
+    path.lineTo(last.x, last.y);
+    return path;
+  }
+
+  /** Shift every point perpendicular to its local stroke direction and
+   *  return a smoothed path along the shifted points. The bristle splay
+   *  passes use this to trace faint parallel lines either side of the
+   *  main stroke — what sells the "brush bristles" look. */
+  function buildShiftedPath(pxPts: Point[], offset: number): Path2D {
+    const n = pxPts.length;
+    const shifted: Point[] = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = pxPts[Math.max(0, i - 1)];
+      const b = pxPts[Math.min(n - 1, i + 1)];
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len;
+      dy /= len;
+      // Perpendicular to direction = (-dy, dx).
+      shifted[i] = {
+        x: pxPts[i].x + (-dy) * offset,
+        y: pxPts[i].y + dx * offset,
+      };
+    }
+    return buildSmoothPath(shifted);
+  }
+
   function drawStroke(pts: Point[], color: string) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
     const sy = canvas.height / VB;
+    const w = userStrokeWidthPx();
+
+    // Convert once to pixel-space so every pass can reuse the points.
+    const pxPts: Point[] = pts.map((p) => ({ x: p.x * sx, y: p.y * sy }));
+    const mainPath = buildSmoothPath(pxPts);
 
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth = userStrokeWidthPx();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    // Subtle drop shadow under the stroke — just enough to give the
-    // ink-on-paper hint. Matches the look of the brush reference.
+
+    // Pass 1 — wide faint halo. Makes the ink "bleed" outward a touch
+    // so the edges aren't razor-sharp.
+    ctx.globalAlpha = 0.08;
+    ctx.lineWidth = w * 1.8;
+    ctx.stroke(mainPath);
+
+    // Pass 2 — outer ink at ~1/3 alpha. Fills the space between halo
+    // and core, giving the soft dark-to-light falloff you see in real
+    // sumi-e strokes.
+    ctx.globalAlpha = 0.32;
+    ctx.lineWidth = w * 1.25;
+    ctx.stroke(mainPath);
+
+    // Pass 3 — dense core at full opacity, with the subtle paper-
+    // shadow so each stroke feels lifted off the surface.
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = w;
     ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
     ctx.shadowBlur = 3;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 2;
+    ctx.stroke(mainPath);
+    ctx.shadowColor = 'transparent';
 
-    ctx.beginPath();
-    if (pts.length === 2) {
-      ctx.moveTo(pts[0].x * sx, pts[0].y * sy);
-      ctx.lineTo(pts[1].x * sx, pts[1].y * sy);
-    } else {
-      // Walk the polyline; for each interior point, lay down a quadratic
-      // Bezier that enters from the previous midpoint, bends through the
-      // current point, and exits at the next midpoint. This is the
-      // standard "smooth through a noisy polyline" trick — cheap and
-      // gives a visibly de-jagged curve without resampling.
-      ctx.moveTo(pts[0].x * sx, pts[0].y * sy);
-      for (let i = 1; i < pts.length - 1; i++) {
-        const midX = (pts[i].x + pts[i + 1].x) / 2;
-        const midY = (pts[i].y + pts[i + 1].y) / 2;
-        ctx.quadraticCurveTo(
-          pts[i].x * sx,
-          pts[i].y * sy,
-          midX * sx,
-          midY * sy,
-        );
-      }
-      const last = pts[pts.length - 1];
-      ctx.lineTo(last.x * sx, last.y * sy);
-    }
-    ctx.stroke();
+    // Pass 4 — bristle splay. Two thin low-alpha paths shifted
+    // perpendicular to the stroke; fakes the dry-brush streaks you see
+    // at the edges of real ink strokes without needing a texture.
+    const splay = w * 0.55;
+    ctx.globalAlpha = 0.18;
+    ctx.lineWidth = w * 0.32;
+    ctx.stroke(buildShiftedPath(pxPts, +splay));
+    ctx.stroke(buildShiftedPath(pxPts, -splay));
+
     ctx.restore();
   }
 
@@ -610,12 +668,28 @@
       svgEl.style.opacity = hideRefOnMount ? '0' : '1';
       svgEl.style.pointerEvents = 'none';
       svgEl.style.transition = 'opacity 0.2s';
+      // Inject the ink-bleed filter into the SVG's <defs>. feTurbulence
+      // generates a fractal noise pattern; feDisplacementMap uses that
+      // noise to shove each path pixel sideways by a few pixels,
+      // producing the frayed-bristle edge of a real brush stroke.
+      const NS = 'http://www.w3.org/2000/svg';
+      const defs = document.createElementNS(NS, 'defs');
+      defs.innerHTML =
+        `<filter id="${inkFilterId}" x="-10%" y="-10%" width="120%" height="120%">` +
+          `<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" stitchTiles="stitch" result="noise"/>` +
+          `<feDisplacementMap in="SourceGraphic" in2="noise" scale="1.8"/>` +
+        `</filter>`;
+      svgEl.insertBefore(defs, svgEl.firstChild);
+
       refPaths = Array.from(svgEl.querySelectorAll('path'));
       refPaths.forEach((p) => {
         p.setAttribute('stroke-width', String(REF_STROKE_VB));
         p.setAttribute('stroke-linecap', 'round');
         p.setAttribute('stroke-linejoin', 'round');
         p.setAttribute('fill', 'none');
+        // Per-path filter so the stroke-number markers (injected later
+        // as a sibling <g>) don't get distorted by the displacement.
+        p.setAttribute('filter', `url(#${inkFilterId})`);
       });
     }
 
