@@ -194,20 +194,14 @@
     return path;
   }
 
-  /** Number of bristle hairs per stroke. Density-biased so more end
-   *  before the stroke finishes than survive to the tail — mimics a
-   *  brush shedding ink over its path. */
-  const BRISTLE_COUNT = 18;
-
-  /** Sample a point on the smoothed polyline at t ∈ [0,1] along with
-   *  its local unit-tangent. Used to offset bristles perpendicular to
-   *  stroke direction. */
+  /** Sample a point on the smoothed polyline at t ∈ [0,1]. Used by
+   *  the per-segment renderer that fades stroke alpha at both ends. */
   function pointAt(
     pxPts: Point[],
     cum: number[],
     total: number,
     t: number,
-  ): { x: number; y: number; nx: number; ny: number } {
+  ): { x: number; y: number } {
     const target = Math.max(0, Math.min(1, t)) * total;
     for (let i = 1; i < cum.length; i++) {
       if (cum[i] >= target) {
@@ -215,31 +209,23 @@
         const b = pxPts[i];
         const segLen = cum[i] - cum[i - 1] || 1;
         const segT = (target - cum[i - 1]) / segLen;
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        const len = Math.hypot(dx, dy) || 1;
-        dx /= len;
-        dy /= len;
         return {
           x: a.x + (b.x - a.x) * segT,
           y: a.y + (b.y - a.y) * segT,
-          // Perpendicular = (-tangent.y, tangent.x).
-          nx: -dy,
-          ny: dx,
         };
       }
     }
     const last = pxPts[pxPts.length - 1];
-    return { x: last.x, y: last.y, nx: 0, ny: 1 };
+    return { x: last.x, y: last.y };
   }
 
-  /** Deterministic pseudo-random in [0, 1). Keyed by (seed, i, k) so
-   *  the same stroke redraws with the same bristle pattern on every
-   *  frame — no flicker during morph or reveal — while different
-   *  strokes get different bristle arrangements. */
-  function rnd(seed: number, i: number, k: number): number {
-    const v = Math.sin(seed + i * 91.7 + k * 31.3) * 43758.5453;
-    return v - Math.floor(v);
+  /** Alpha ramp for the stroke-length fade: 0 at t=0, ramps linearly
+   *  to 1 at t=1/3, stays 1 through t=2/3, then ramps back down to 0
+   *  at t=1. Middle third is solid, outer thirds fade to transparent. */
+  function alphaAtT(t: number): number {
+    if (t <= 1 / 3) return Math.max(0, t * 3);
+    if (t >= 2 / 3) return Math.max(0, (1 - t) * 3);
+    return 1;
   }
 
   function drawStroke(pts: Point[], color: string) {
@@ -249,10 +235,9 @@
     const w = userStrokeWidthPx();
 
     const pxPts: Point[] = pts.map((p) => ({ x: p.x * sx, y: p.y * sy }));
-    const mainPath = buildSmoothPath(pxPts);
 
-    // Pre-compute cumulative arc length so we can walk t ∈ [0, 1] along
-    // the stroke and land on the right segment.
+    // Pre-compute cumulative arc length so we can walk t ∈ [0, 1] at
+    // regular intervals and land on the right segment.
     const cum: number[] = [0];
     for (let i = 1; i < pxPts.length; i++) {
       cum.push(
@@ -265,59 +250,35 @@
     ctx.strokeStyle = color;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-
-    // Core stroke — solid ink body with the paper drop shadow.
     ctx.lineWidth = w;
+    // Paper drop shadow under every sub-segment so the ink feels
+    // anchored. Cheap enough at canvas scale (no compositor layers).
     ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
     ctx.shadowBlur = 3;
     ctx.shadowOffsetY = 2;
-    ctx.stroke(mainPath);
-    ctx.shadowColor = 'transparent';
 
-    // Bristle mask. Each bristle is a thin semi-transparent polyline
-    // parallel to the main stroke, offset perpendicular so it sits
-    // along or just beyond the core edge. Earlier version kept bristles
-    // inside the core radius, which meant they were painted over by
-    // the solid body — invisible. Now they extend out to ±~w so they
-    // read as real streaks alongside the stroke.
-    //
-    // Density falloff: bristle.tEnd is distributed as rnd^1.8, which
-    // skews heavily toward the start — most bristles terminate in the
-    // first third of the stroke, a few reach further, only a sparse
-    // tail survives to the end. That's the "brush loses ink over the
-    // length of a stroke" effect.
-    const seed = pts[0].x * 73.17 + pts[0].y * 41.31 + pts.length * 7.13;
-    const SAMPLES_PER_BRISTLE = 24;
-
-    for (let i = 0; i < BRISTLE_COUNT; i++) {
-      // Perpendicular offset: push bristles out to ±~w so their
-      // centerline sits near (or just past) the core edge. Bristles
-      // biased away from dead-center so the pattern doesn't bunch up.
-      const biasSign = rnd(seed, i, 0) < 0.5 ? -1 : 1;
-      const biasMag = 0.45 + rnd(seed, i, 1) * 0.55; // [0.45, 1.0]
-      const offset = biasSign * biasMag * w;
-
-      // Density-weighted end point, with a small floor so tiny "stub"
-      // bristles at the stroke start still register visually.
-      const r = rnd(seed, i, 2);
-      const tEnd = Math.max(0.06, Math.pow(r, 1.8));
-
-      // Per-bristle width + alpha jitter. Width 0.22-0.36 w so bristles
-      // read as thin hairs; alpha 0.28-0.46 so they're visible against
-      // the paper without overpowering the core.
-      ctx.lineWidth = w * (0.22 + rnd(seed, i, 4) * 0.14);
-      ctx.globalAlpha = 0.28 + rnd(seed, i, 3) * 0.18;
-
-      ctx.beginPath();
-      for (let s = 0; s <= SAMPLES_PER_BRISTLE; s++) {
-        const t = (s / SAMPLES_PER_BRISTLE) * tEnd;
-        const p = pointAt(pxPts, cum, total, t);
-        const px = p.x + p.nx * offset;
-        const py = p.y + p.ny * offset;
-        if (s === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
+    // Render the stroke as N short segments spanning the full arc. Each
+    // segment's alpha is picked by alphaAtT(mid) so the first third
+    // fades in, middle third is solid, last third fades out. Segments
+    // overlap slightly (round linecaps) so the alpha transitions read
+    // as a smooth gradient rather than visible banding.
+    const SEGMENTS = 56;
+    let prev = pointAt(pxPts, cum, total, 0);
+    for (let i = 1; i <= SEGMENTS; i++) {
+      const t = i / SEGMENTS;
+      const midT = (t + (i - 1) / SEGMENTS) / 2;
+      const a = alphaAtT(midT);
+      if (a <= 0.01) {
+        prev = pointAt(pxPts, cum, total, t);
+        continue;
       }
+      const cur = pointAt(pxPts, cum, total, t);
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(cur.x, cur.y);
       ctx.stroke();
+      prev = cur;
     }
     ctx.globalAlpha = 1;
     ctx.restore();
@@ -852,7 +813,11 @@
     align-items: baseline;
     justify-content: space-between;
     gap: 0.5rem;
-    margin-bottom: 0.75rem;
+    margin: 0 auto 0.75rem;
+    /* Constrain to the canvas width so on pages that don't wrap
+       PracticeMorph in their own max-width container (FillKanji),
+       the hint text doesn't fly off to the viewport edges. */
+    max-width: 420px;
     padding: 0 0.25rem;
     color: var(--ink-2);
     font-size: 0.9rem;
