@@ -198,37 +198,12 @@
     return path;
   }
 
-  /** Shift every point perpendicular to its local stroke direction and
-   *  return a smoothed path along the shifted points. The bristle splay
-   *  passes use this to trace faint parallel lines either side of the
-   *  main stroke — what sells the "brush bristles" look. */
-  function buildShiftedPath(pxPts: Point[], offset: number): Path2D {
-    const n = pxPts.length;
-    const shifted: Point[] = new Array(n);
-    for (let i = 0; i < n; i++) {
-      const a = pxPts[Math.max(0, i - 1)];
-      const b = pxPts[Math.min(n - 1, i + 1)];
-      let dx = b.x - a.x;
-      let dy = b.y - a.y;
-      const len = Math.hypot(dx, dy) || 1;
-      dx /= len;
-      dy /= len;
-      // Perpendicular to direction = (-dy, dx).
-      shifted[i] = {
-        x: pxPts[i].x + (-dy) * offset,
-        y: pxPts[i].y + dx * offset,
-      };
-    }
-    return buildSmoothPath(shifted);
-  }
-
   function drawStroke(pts: Point[], color: string) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
     const sy = canvas.height / VB;
     const w = userStrokeWidthPx();
 
-    // Convert once to pixel-space so every pass can reuse the points.
     const pxPts: Point[] = pts.map((p) => ({ x: p.x * sx, y: p.y * sy }));
     const mainPath = buildSmoothPath(pxPts);
 
@@ -237,21 +212,15 @@
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // Pass 1 — wide faint halo. Makes the ink "bleed" outward a touch
-    // so the edges aren't razor-sharp.
-    ctx.globalAlpha = 0.08;
-    ctx.lineWidth = w * 1.8;
+    // Pass 1 — very faint outer halo. Just enough soft-edge bleed to
+    // not read as a geometric line. Previous (wider, higher-alpha) halo
+    // made the strokes look smoky — the reference is mostly solid ink.
+    ctx.globalAlpha = 0.06;
+    ctx.lineWidth = w * 1.4;
     ctx.stroke(mainPath);
 
-    // Pass 2 — outer ink at ~1/3 alpha. Fills the space between halo
-    // and core, giving the soft dark-to-light falloff you see in real
-    // sumi-e strokes.
-    ctx.globalAlpha = 0.32;
-    ctx.lineWidth = w * 1.25;
-    ctx.stroke(mainPath);
-
-    // Pass 3 — dense core at full opacity, with the subtle paper-
-    // shadow so each stroke feels lifted off the surface.
+    // Pass 2 — dense core at full opacity with the paper drop shadow.
+    // This is the stroke the user sees; the halo just softens the edge.
     ctx.globalAlpha = 1;
     ctx.lineWidth = w;
     ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
@@ -259,16 +228,6 @@
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 2;
     ctx.stroke(mainPath);
-    ctx.shadowColor = 'transparent';
-
-    // Pass 4 — bristle splay. Two thin low-alpha paths shifted
-    // perpendicular to the stroke; fakes the dry-brush streaks you see
-    // at the edges of real ink strokes without needing a texture.
-    const splay = w * 0.55;
-    ctx.globalAlpha = 0.18;
-    ctx.lineWidth = w * 0.32;
-    ctx.stroke(buildShiftedPath(pxPts, +splay));
-    ctx.stroke(buildShiftedPath(pxPts, -splay));
 
     ctx.restore();
   }
@@ -674,10 +633,15 @@
       // producing the frayed-bristle edge of a real brush stroke.
       const NS = 'http://www.w3.org/2000/svg';
       const defs = document.createElementNS(NS, 'defs');
+      // Very low frequency + tiny displacement = slow, organic waves on
+      // the stroke edges rather than high-frequency bristle noise.
+      // Previous 0.9/1.8 settings were creating visible static along
+      // every pixel — the reference image has mostly clean edges with
+      // just a touch of organic softness, so we match that.
       defs.innerHTML =
-        `<filter id="${inkFilterId}" x="-10%" y="-10%" width="120%" height="120%">` +
-          `<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" stitchTiles="stitch" result="noise"/>` +
-          `<feDisplacementMap in="SourceGraphic" in2="noise" scale="1.8"/>` +
+        `<filter id="${inkFilterId}" x="-5%" y="-5%" width="110%" height="110%">` +
+          `<feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="1" seed="7" result="noise"/>` +
+          `<feDisplacementMap in="SourceGraphic" in2="noise" scale="0.8"/>` +
         `</filter>`;
       svgEl.insertBefore(defs, svgEl.firstChild);
 
