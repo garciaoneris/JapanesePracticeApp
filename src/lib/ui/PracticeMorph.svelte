@@ -816,7 +816,6 @@
     border-radius: 999px;
     background: var(--surface-2);
     border: 1px solid var(--border);
-    transition: background 0.25s ease, border-color 0.25s ease;
   }
   .seg.filled {
     background: var(--accent);
@@ -836,7 +835,6 @@
     border-radius: 14px;
     padding: 0.85rem 1rem;
     box-shadow: var(--shadow-sm);
-    animation: fade-in 0.25s ease-out;
   }
   .score-big {
     display: flex;
@@ -907,7 +905,6 @@
     padding: 0.85rem 1rem;
     text-align: center;
     color: var(--ink);
-    animation: fade-in 0.4s ease-out;
     cursor: pointer;
   }
   .callout-card:hover {
@@ -959,11 +956,6 @@
     color: var(--ink-2);
     font-size: 0.85rem;
     margin-top: 0.3rem;
-  }
-
-  @keyframes fade-in {
-    from { opacity: 0; transform: translateY(6px); }
-    to { opacity: 1; transform: translateY(0); }
   }
 
   .row {

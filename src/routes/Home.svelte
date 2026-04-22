@@ -494,7 +494,6 @@
     background: var(--gradient-brand);
     border-radius: 999px;
     box-shadow: 0 0 12px color-mix(in oklab, var(--accent) 60%, transparent);
-    transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   .xp-numbers {
     font-size: 12px;

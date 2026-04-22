@@ -21,9 +21,6 @@
 </script>
 
 <div class={`tile tier-${tier}`} style="width: {size}px; height: {size}px;">
-  {#if tier === 'platinum'}
-    <div class="shimmer-overlay" aria-hidden="true"></div>
-  {/if}
   <div class="glyph jp-serif" style="font-size: {glyphSize}px;">{char}</div>
   {#if reading}
     <div class="reading jp-sans">{reading}</div>
@@ -134,22 +131,5 @@
     height: 6px;
     border-radius: 999px;
     background: var(--accent);
-  }
-  .shimmer-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      110deg,
-      transparent 30%,
-      rgba(255, 255, 255, 0.5) 50%,
-      transparent 70%
-    );
-    background-size: 200% 100%;
-    pointer-events: none;
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .shimmer-overlay {
-      animation: shimmer 3s linear infinite;
-    }
   }
 </style>
