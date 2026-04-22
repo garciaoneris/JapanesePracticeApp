@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { link } from 'svelte-spa-router';
   import { bundle } from '../lib/data/bundle';
   import { speakJa } from '../lib/speech/tts';
@@ -7,6 +7,8 @@
   import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
   import RevealKanji from '../lib/ui/RevealKanji.svelte';
   import type { Kanji } from '../lib/data/types';
+  import { startTick, stopTick } from '../lib/gamification/goal';
+  import { addXp } from '../lib/gamification/xp';
 
   /** Choice-based question (word-reading, word-meaning, kanji-meaning). */
   type ChoiceQuestion = {
@@ -142,7 +144,8 @@
     reinforcedCount = 0;
   }
 
-  onMount(buildQuestions);
+  onMount(() => { buildQuestions(); startTick(); });
+  onDestroy(() => stopTick());
 
   const current = $derived(questions[idx]);
 
@@ -156,6 +159,10 @@
     } else {
       await reinforceWrong(current.mistake.type, current.mistake.id);
     }
+    // XP: Reinforce is effortful comeback practice — +10 correct / +3 wrong,
+    // a notch above plain Review so the learner sees returning to a mistake
+    // as genuinely valuable.
+    addXp(isCorrect ? 10 : 3).catch(() => {});
     speakJa(current.speakText);
   }
 

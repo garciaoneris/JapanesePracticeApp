@@ -112,7 +112,7 @@
 
     <div class="hero-inner">
       <div class="blossom-badge">
-        <div class="blossom-ring"><Blossom size={82} /></div>
+        <div class="blossom-ring animate-breathe"><Blossom size={82} /></div>
       </div>
 
       <div class="kicker">Session complete</div>

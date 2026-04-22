@@ -10,7 +10,6 @@
   import Petal from '../lib/ui/Petal.svelte';
   import Blossom from '../lib/ui/Blossom.svelte';
   import Flame from '../lib/ui/Flame.svelte';
-  import PetalField from '../lib/ui/PetalField.svelte';
   import GoalRing from '../lib/ui/GoalRing.svelte';
   import KanjiTile, { type TileTier } from '../lib/ui/KanjiTile.svelte';
 
@@ -196,7 +195,7 @@
   );
 </script>
 
-<div class="screen">
+<div class="screen home-screen">
   <!-- ── Top bar ──────────────────────────────────────────────── -->
   <header class="topbar">
     <div class="brand">
@@ -222,8 +221,10 @@
 
   <!-- ── Hero card: goal ring + XP ──────────────────────────── -->
   <section class="hero">
-    <PetalField count={10} />
-
+    <!-- Drifting petals deliberately omitted on Home: the grid below was
+         the iPad perf hot spot, and removing the hero's continuous SVG
+         animation keeps the whole screen still. Learn + Complete still
+         get the drift on their heroes. -->
     <div class="hero-row">
       <GoalRing pct={goalPct} size={120} stroke={11} sublabel="min today">
         {#snippet label()}

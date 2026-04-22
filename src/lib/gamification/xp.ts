@@ -3,6 +3,7 @@
  *  like real achievements. */
 
 import { getMeta, putMeta } from '../data/db';
+import { notifyXpGain } from './xpToast';
 
 /** Cumulative XP required to reach the START of level n (n >= 1).
  *  Level 1 starts at 0 XP; level 2 at 200; level 14 at 21,000. */
@@ -46,10 +47,15 @@ export async function addXp(delta: number): Promise<{ state: XpState; leveledUp:
   }
   const prev = (await getMeta<number>('xp')) ?? 0;
   const prevLevel = levelForXp(prev);
-  const next = prev + Math.round(delta);
+  const rounded = Math.round(delta);
+  const next = prev + rounded;
   await putMeta('xp', next);
   const nextLevel = levelForXp(next);
   if (nextLevel !== prevLevel) await putMeta('level', nextLevel);
+  // Surface the gain to the global <XpToast /> so the learner sees a
+  // floating "+N XP" chip per award — drives visibility of the reward
+  // loop without each caller having to worry about UI.
+  notifyXpGain(rounded);
   const state = await getXpState();
   return nextLevel > prevLevel
     ? { state, leveledUp: true, from: prevLevel, to: nextLevel }

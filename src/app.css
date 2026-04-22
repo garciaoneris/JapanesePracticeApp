@@ -150,8 +150,10 @@ button {
   padding: 0.65em 1.1em;
   cursor: pointer;
   touch-action: manipulation;
+  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
 }
 button:active:not(:disabled) {
+  transform: scale(0.97);
   background: var(--surface-2);
 }
 button:disabled {
@@ -175,23 +177,61 @@ a { color: var(--accent); text-decoration: none; }
 }
 
 /* ── Motion ───────────────────────────────────────────────────────── */
-/* iPad perf: strip every CSS transition + keyframe animation app-wide.
-   This was reducing the big L3 filter / platinum-shimmer / hero-petal
-   cost from "visibly janky" to "instant". Any `.animate-*` / `.fade-in`
-   class left in the codebase falls through as a no-op. */
-*, *::before, *::after {
+/* Animations + transitions are allowed *everywhere except Home*. Home
+   stays static because its long kanji grid was the only place the iPad
+   showed real frame drops; everything else (Learn, Review, Complete,
+   Settings, Vocab, FillKanji, Reinforce) gets the full redesign motion.
+   The Home root scopes the kill via `.home-screen` + the rules below. */
+.home-screen,
+.home-screen * {
   animation-duration: 0s !important;
   animation-delay: 0s !important;
   animation-iteration-count: 1 !important;
   transition: none !important;
 }
 
-/* One deliberate exception: the reference-stroke reveal in PracticeMorph
-   paints each kanji stroke over time by transitioning stroke-dashoffset
-   on the SVG path — that's the pedagogical animation that teaches stroke
-   order, not an ambient effect. Keep it. The per-path duration (700ms,
-   matching PracticeMorph's PER_STROKE_MS constant) is pinned here so
-   removing the inline transition still lets the reveal play. */
-.stage path {
-  transition: stroke-dashoffset 700ms ease-out !important;
+@view-transition { navigation: auto; }
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+
+@keyframes float-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 40%, transparent); }
+  50%      { box-shadow: 0 0 0 10px color-mix(in oklab, var(--accent) 0%, transparent); }
+}
+
+@keyframes confetti-fall {
+  to { transform: translateY(120vh) rotate(720deg); opacity: 0; }
+}
+
+@keyframes petal-drift {
+  0%   { transform: translate(0, -10%) rotate(0deg); }
+  100% { transform: translate(40px, 110%) rotate(360deg); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in               { animation: fadeInUp 0.25s ease-out; }
+  .animate-breathe       { animation: breathe 2.5s ease-in-out infinite; }
+  .animate-float-up      { animation: float-up 0.4s ease-out both; }
+  .animate-pulse-glow    { animation: pulse-glow 2s ease-in-out infinite; }
+  .animate-petal-drift   { animation: petal-drift linear infinite; }
+  .animate-shimmer       { animation: shimmer 3s linear infinite; }
+  .animate-confetti-fall { animation: confetti-fall 3s linear infinite; }
 }

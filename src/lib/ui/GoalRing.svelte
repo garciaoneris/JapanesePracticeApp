@@ -66,7 +66,7 @@
     transform: rotate(-90deg);
   }
   .progress {
-    /* Transition removed — snaps to target. */
+    transition: stroke-dashoffset 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   .center {
     position: absolute;

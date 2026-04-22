@@ -7,6 +7,7 @@
   import { textUsesOnlyKnown } from '../data/known';
   import Furigana from './Furigana.svelte';
   import { bundle } from '../data/bundle';
+  import { addXp } from '../gamification/xp';
 
   interface Props {
     kanji: Kanji;
@@ -484,6 +485,16 @@
     // Notify parent (Review draw mode uses this to grade the SRS card).
     onScore?.(s);
 
+    // XP for stroke practice. Per spec: +10 XP per stroke up to 120,
+    // scaled by how well the attempt matched the reference. Only award
+    // in Learn mode — Review draw grading happens via the parent's
+    // `onScore` handler which awards its own XP at a different rate.
+    if (!minimal) {
+      const base = Math.min(12, userStrokes.length) * 10;   // cap at 120
+      const quality = Math.max(0.25, s / 100);               // scuffed drills still pay out a floor
+      addXp(Math.round(base * quality)).catch(() => {});
+    }
+
     // Pick a random callout from the filtered set and (optionally) speak it.
     const callout = pickRandomCallout();
     currentCallout = callout;
@@ -816,6 +827,7 @@
     border-radius: 999px;
     background: var(--surface-2);
     border: 1px solid var(--border);
+    transition: background 0.25s ease, border-color 0.25s ease;
   }
   .seg.filled {
     background: var(--accent);
@@ -835,6 +847,11 @@
     border-radius: 14px;
     padding: 0.85rem 1rem;
     box-shadow: var(--shadow-sm);
+    animation: fade-in 0.25s ease-out;
+  }
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
   .score-big {
     display: flex;
@@ -906,6 +923,7 @@
     text-align: center;
     color: var(--ink);
     cursor: pointer;
+    animation: fade-in 0.4s ease-out;
   }
   .callout-card:hover {
     border-color: color-mix(in oklab, var(--accent) 60%, transparent);

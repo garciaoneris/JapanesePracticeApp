@@ -10,6 +10,7 @@
   import Settings from './routes/Settings.svelte';
   import Complete from './routes/Complete.svelte';
   import NotFound from './routes/NotFound.svelte';
+  import XpToast from './lib/ui/XpToast.svelte';
   import { onMount } from 'svelte';
   import { ensureBundleLoaded } from './lib/data/bundle';
   import { syncNow, getToken } from './lib/data/sync';
@@ -67,6 +68,10 @@
 {:else}
   <Router {routes} />
 {/if}
+
+<!-- Global XP-gain toast. Listens to notifyXpGain events from anywhere
+     in the app and floats a "+N XP" chip near the corner per award. -->
+<XpToast />
 
 <style>
   .center {

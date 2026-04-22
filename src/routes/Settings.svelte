@@ -401,6 +401,7 @@
     display: flex; align-items: center; gap: 14px;
     box-shadow: var(--shadow-sm);
     cursor: pointer;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
   .theme-card.selected {
     border-color: var(--accent);
@@ -578,6 +579,8 @@
     border: 2px solid currentColor; border-top-color: transparent;
     border-radius: 50%; vertical-align: -2px;
   }
-  /* Spinner animation removed for perf — the "Syncing…" label alone
-     communicates in-flight state. */
+  @media (prefers-reduced-motion: no-preference) {
+    .spinner { animation: gentle-spin 0.8s linear infinite; }
+  }
+  @keyframes gentle-spin { to { transform: rotate(360deg); } }
 </style>

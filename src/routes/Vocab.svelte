@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { link } from 'svelte-spa-router';
   import Furigana from '../lib/ui/Furigana.svelte';
   import { bundle } from '../lib/data/bundle';
@@ -7,6 +7,7 @@
   import { kanaMatchScore, recognizeJa, sttSupported } from '../lib/speech/stt';
   import { filterExamples, loadKnownKanji } from '../lib/data/known';
   import { exampleJp } from '../lib/data/types';
+  import { startTick, stopTick } from '../lib/gamification/goal';
 
   interface Params {
     id: string;
@@ -24,7 +25,9 @@
     knownKanji = await loadKnownKanji();
     learnKanji = sessionStorage.getItem('vocab-from-learn');
     sessionStorage.removeItem('vocab-from-learn');
+    startTick();
   });
+  onDestroy(() => stopTick());
 
   const filteredExamples = $derived.by(() => {
     if (!word) return { kept: [], tooAdvanced: false };

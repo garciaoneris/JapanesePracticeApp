@@ -550,6 +550,7 @@
     border-radius: 999px;
     background: var(--surface-2);
     border: 1px solid var(--border);
+    transition: background 0.3s ease;
   }
   .track-seg.filled {
     background: var(--gradient-brand);

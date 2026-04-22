@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { link } from 'svelte-spa-router';
   import { bundle } from '../lib/data/bundle';
   import { loadKnownKanji } from '../lib/data/known';
@@ -8,6 +8,8 @@
   import type { Kanji, Word } from '../lib/data/types';
   import { recordMistake } from '../lib/data/mistakes';
   import { speakJa } from '../lib/speech/tts';
+  import { startTick, stopTick } from '../lib/gamification/goal';
+  import { addXp } from '../lib/gamification/xp';
 
   // ── Helpers ──────────────────────────────────────────────────────────
   function toHira(s: string): string {
@@ -54,6 +56,7 @@
   let _qsKey = '';  // resolved quiz-score meta key for this mode
 
   onMount(async () => {
+    startTick();
     _qsKey = await quizScoreKey();
     const [known, scores, qs] = await Promise.all([
       loadKnownKanji(),
@@ -212,13 +215,18 @@
   function pickAnswer(idx: number): void {
     if (quizPicked !== null) return;
     quizPicked = idx;
-    if (idx === currentQuestion.correctIdx) {
+    const isCorrect = idx === currentQuestion.correctIdx;
+    if (isCorrect) {
       quizCorrectCount++;
     } else {
       // Record this as an open mistake for the Reinforce mode.
       const type = currentQuestion.type === 'reading' ? 'word-reading' : 'word-meaning';
       recordMistake({ type, id: currentQuestion.word.id }).catch(() => {});
     }
+    // XP award — matches the Review meaning-quiz scale: +8 correct, +2 effort
+    // credit for wrong answers so the learner still gets *some* reward for
+    // showing up. Async + swallowed because UI feedback isn't load-bearing.
+    addXp(isCorrect ? 8 : 2).catch(() => {});
     // Speak the word aloud so the user hears the correct pronunciation.
     speakJa(currentQuestion.word.jp);
   }
@@ -314,6 +322,8 @@
     }
     return 'var(--err)'; // below 50%
   }
+
+  onDestroy(() => stopTick());
 </script>
 
 <div class="nav-links">

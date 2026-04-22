@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { link } from 'svelte-spa-router';
   import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
   import RevealKanji from '../lib/ui/RevealKanji.svelte';
@@ -10,6 +10,8 @@
   import { speakJa } from '../lib/speech/tts';
   import { exampleJp } from '../lib/data/types';
   import type { Kanji, Example } from '../lib/data/types';
+  import { startTick, stopTick } from '../lib/gamification/goal';
+  import { addXp } from '../lib/gamification/xp';
 
   // ── Level handling (mirrors Home.svelte) ───────────────────────────────
   // Levels: 1=N5, 2=N4, 3=N3+N2, 4=N1, 5=ungraded jouyou/jinmeiyou.
@@ -160,7 +162,9 @@
 
   onMount(() => {
     current = pickRandom();
+    startTick();
   });
+  onDestroy(() => stopTick());
 
   // Filled (non-blanked) version of the target segment, used in the reveal
   // state — same data as the original so Furigana keeps its reading / gloss.
@@ -191,6 +195,9 @@
       // practice converges.
       recordMistake({ type: 'kanji-writing', id: ch }).catch(() => {});
     }
+    // XP: +12 for a successful fill (same as Review draw-mode — this is a
+    // harder task than meaning-choice), +2 effort credit otherwise.
+    addXp(score >= 70 ? 12 : 2).catch(() => {});
   }
 
   function nextQuestion() {
