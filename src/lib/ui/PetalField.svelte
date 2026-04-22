@@ -43,7 +43,10 @@
   }
   :global([data-theme='neon']) .p {
     opacity: 0.55;
-    filter: blur(0.2px) drop-shadow(0 0 4px currentColor);
+    /* `filter: blur + drop-shadow` dropped — on iPad that filter
+       pass per petal (per compositor frame) was the main source of
+       Neon-only jank. The petals still read as pink against the
+       dark bg via their accent color. */
   }
   @media (prefers-reduced-motion: no-preference) {
     .p {
