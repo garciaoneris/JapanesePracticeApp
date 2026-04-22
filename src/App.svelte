@@ -8,11 +8,24 @@
   import Reinforce from './routes/Reinforce.svelte';
   import FillKanji from './routes/FillKanji.svelte';
   import Settings from './routes/Settings.svelte';
+  import Complete from './routes/Complete.svelte';
   import NotFound from './routes/NotFound.svelte';
   import { onMount } from 'svelte';
   import { ensureBundleLoaded } from './lib/data/bundle';
   import { syncNow, getToken } from './lib/data/sync';
   import { loadFuriganaMode } from './lib/data/furiganaMode';
+  import { getMeta } from './lib/data/db';
+
+  type Theme = 'washi' | 'neon' | 'sakura';
+  const VALID_THEMES: readonly Theme[] = ['washi', 'neon', 'sakura'];
+
+  /** Read persisted theme and apply to <html> before any route renders so
+   *  first paint uses the correct palette (no flash of default). */
+  async function applyTheme(): Promise<void> {
+    const stored = await getMeta<string>('theme');
+    const theme: Theme = VALID_THEMES.includes(stored as Theme) ? (stored as Theme) : 'washi';
+    document.documentElement.setAttribute('data-theme', theme);
+  }
 
   const routes = {
     '/': Home,
@@ -21,6 +34,7 @@
     '/vocab/:id': Vocab,
     '/review': Review,
     '/fill-kanji': FillKanji,
+    '/complete': Complete,
     '/settings': Settings,
     '/reinforce': Reinforce,
     '*': NotFound,
@@ -31,6 +45,8 @@
 
   onMount(async () => {
     try {
+      // Theme first so the loading-spinner flash uses the right palette.
+      await applyTheme();
       await ensureBundleLoaded();
       // Prime the furigana-mode cache before any Furigana instance mounts.
       await loadFuriganaMode();
@@ -59,7 +75,7 @@
     justify-content: center;
     height: 100%;
     font-size: 1.1rem;
-    color: var(--fg-dim);
+    color: var(--muted);
   }
-  .err { color: var(--err); }
+  .err { color: var(--rose); }
 </style>

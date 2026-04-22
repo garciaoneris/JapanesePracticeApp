@@ -1,31 +1,40 @@
 <script lang="ts">
-  import { link } from 'svelte-spa-router';
-  import { onMount } from 'svelte';
+  import { link, push } from 'svelte-spa-router';
+  import { onMount, onDestroy } from 'svelte';
   import { bundle } from '../lib/data/bundle';
   import { dueSrs, putSrs, getSrs, getAllBestScores, getMeta, putMeta } from '../lib/data/db';
   import { grade, newCard } from '../lib/srs/sm2';
-  import { speakJa, ttsSupported } from '../lib/speech/tts';
+  import { speakJa } from '../lib/speech/tts';
   import { KNOWN_THRESHOLD } from '../lib/data/known';
   import { reviewScoreKey, reviewDrawScoreKey } from '../lib/data/mode';
   import type { Grade, SrsState } from '../lib/data/types';
   import { recordMistake } from '../lib/data/mistakes';
   import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
   import RevealKanji from '../lib/ui/RevealKanji.svelte';
+  import Petal from '../lib/ui/Petal.svelte';
+  import Blossom from '../lib/ui/Blossom.svelte';
+  import { addXp, getXpState } from '../lib/gamification/xp';
+  import { addMinutes, startTick, stopTick } from '../lib/gamification/goal';
+  import { onGoalHit, getStreakState } from '../lib/gamification/streak';
+  import { newlyEarnedFromEvent, earn, type BadgeDef } from '../lib/gamification/badges';
 
   const NEW_PER_SESSION = 10;
 
   let queue = $state<SrsState[]>([]);
   let idx = $state(0);
-  let showBack = $state(false);
   let done = $state(false);
-  let reviewResults = $state<Map<string, {correct: number, total: number}>>(new Map());
+  let reviewResults = $state<Map<string, { correct: number; total: number }>>(new Map());
 
-  /** Level → jlpt values mapping (same as Home.svelte). */
-  const LEVEL_JLPT: Record<number, number[]> = {
-    1: [5], 2: [4], 3: [3, 2], 4: [1], 5: [0],
-  };
+  /** Session counters drive the microcopy strip and the Complete summary. */
+  let sessionCorrect = $state(0);
+  let sessionBestStreak = $state(0);
+  let correctStreak = $state(0);
+  let sessionStartTs = Date.now();
+  let sessionStartLevel = 1;
+  let sessionStartXp = 0;
 
-  /** Read the level filter from Home's sessionStorage. */
+  const LEVEL_JLPT: Record<number, number[]> = { 1: [5], 2: [4], 3: [3, 2], 4: [1], 5: [0] };
+
   function getLevelFilter(): number | null {
     const v = sessionStorage.getItem('home-jlpt-filter');
     if (!v || v === 'all') return null;
@@ -34,9 +43,8 @@
   }
 
   let levelFilter = $state<number | null>(null);
-  let levelLabel = $derived(levelFilter !== null ? `Lvl ${levelFilter}` : '');
+  const levelLabel = $derived(levelFilter !== null ? `Lvl ${levelFilter}` : '');
 
-  /** Does this SRS card belong to the active level filter? */
   function cardMatchesFilter(card: SrsState, b: ReturnType<typeof bundle>, level: number): boolean {
     const jlpts = LEVEL_JLPT[level] ?? [];
     if (card.kind === 'kanji') {
@@ -59,12 +67,9 @@
     const native = (await getMeta<boolean>('native-mode')) === true;
     const scores = await getAllBestScores();
 
-    // Filter due cards: only show kanji the user has actually mastered
-    // (or all kanji in native mode). Also filter by JLPT level if active.
     due = due.filter((c) => {
       if (levelFilter !== null && !cardMatchesFilter(c, b, levelFilter!)) return false;
       if (native) return true;
-      // Check mastery for this card's kanji
       if (c.kind === 'kanji') {
         const ch = c.id.slice('kanji:'.length);
         return (scores.get(ch) ?? 0) >= KNOWN_THRESHOLD;
@@ -75,8 +80,6 @@
       return w.kanji.length === 0 || w.kanji.every((ch) => (scores.get(ch) ?? 0) >= KNOWN_THRESHOLD);
     });
 
-    // Top up with new cards for kanji/words the user has already mastered
-    // (score >= 80) but hasn't been quizzed on via SRS yet.
     if (due.length < NEW_PER_SESSION) {
       const need = NEW_PER_SESSION - due.length;
       const newCandidates: SrsState[] = [];
@@ -98,18 +101,24 @@
       due.push(...newCandidates);
     }
 
-    // Shuffle.
     for (let i = due.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [due[i], due[j]] = [due[j], due[i]];
     }
     queue = due;
     idx = 0;
-    showBack = false;
     done = queue.length === 0;
+    sessionStartTs = Date.now();
+    const startXp = await getXpState();
+    sessionStartLevel = startXp.level;
+    sessionStartXp = startXp.xp;
   }
 
-  onMount(buildQueue);
+  onMount(() => {
+    buildQueue();
+    startTick();
+  });
+  onDestroy(() => stopTick());
 
   const current = $derived(queue[idx]);
   const display = $derived.by(() => {
@@ -124,15 +133,12 @@
     }
   });
 
-  // ── Multiple-choice quiz ──────────────────────────────────────────────
+  // ── Multiple-choice quiz ──────────────────────────────────────────
   let choices = $state<string[]>([]);
   let correctChoice = $state('');
   let picked = $state<number | null>(null);
-
-  /** Set when a drawing score arrives. null = not yet drawn. */
   let drawScoreDone = $state<number | null>(null);
 
-  /** Deterministic coin flip: kanji cards alternate between 'draw' and 'choice' based on a hash of the card id. */
   function cardDisplayMode(card: SrsState | undefined): 'choice' | 'draw' {
     if (!card || card.kind !== 'kanji') return 'choice';
     let h = 0;
@@ -150,7 +156,6 @@
     return a;
   }
 
-  /** Build 4 meaning choices for the current card. */
   function buildChoices() {
     if (!display) return;
     const b = bundle();
@@ -163,8 +168,6 @@
       return;
     }
     correctChoice = correct;
-
-    // Gather distractors from other kanji/words in the same JLPT level.
     const pool: string[] = [];
     for (const k of Object.values(b.kanji)) {
       const m = k.meanings.slice(0, 2).join(', ');
@@ -175,10 +178,24 @@
     picked = null;
   }
 
-  // Build choices whenever the card changes.
   $effect(() => {
     if (display && cardMode === 'choice') buildChoices();
   });
+
+  function trackResult(ch: string, isCorrect: boolean): void {
+    const prev = reviewResults.get(ch) ?? { correct: 0, total: 0 };
+    reviewResults.set(ch, {
+      correct: prev.correct + (isCorrect ? 1 : 0),
+      total: prev.total + 1,
+    });
+    if (isCorrect) {
+      sessionCorrect += 1;
+      correctStreak += 1;
+      if (correctStreak > sessionBestStreak) sessionBestStreak = correctStreak;
+    } else {
+      correctStreak = 0;
+    }
+  }
 
   async function pickChoice(i: number) {
     if (picked !== null) return;
@@ -189,25 +206,22 @@
     const next = grade(current, g);
     await putSrs(next);
 
-    // Track per-kanji review result
     const ch = current.kind === 'kanji'
       ? current.id.replace('kanji:', '')
       : current.id.replace('word:', '').charAt(0);
-    const prev = reviewResults.get(ch) ?? { correct: 0, total: 0 };
-    reviewResults.set(ch, { correct: prev.correct + (isCorrect ? 1 : 0), total: prev.total + 1 });
+    trackResult(ch, isCorrect);
 
-    // Record wrong answers as open mistakes for Reinforce mode.
     if (!isCorrect) {
       if (current.kind === 'kanji') {
-        const kch = current.id.replace('kanji:', '');
-        recordMistake({ type: 'kanji-meaning', id: kch }).catch(() => {});
+        recordMistake({ type: 'kanji-meaning', id: current.id.replace('kanji:', '') }).catch(() => {});
       } else {
-        const wid = current.id.replace('word:', '');
-        recordMistake({ type: 'word-meaning', id: wid }).catch(() => {});
+        recordMistake({ type: 'word-meaning', id: current.id.replace('word:', '') }).catch(() => {});
       }
     }
 
-    // Speak the reading aloud after answering.
+    // XP: +8 for correct (per spec 'good' grade), +2 effort credit for wrong.
+    addXp(isCorrect ? 8 : 2).catch(() => {});
+
     if (display) {
       if (display.kind === 'kanji' && display.kanji) {
         const r = display.kanji.kun[0] ?? display.kanji.on[0] ?? display.kanji.char;
@@ -226,284 +240,507 @@
     const next = grade(current, g);
     await putSrs(next);
 
-    // Track per-kanji result for the session summary
     const ch = current.id.replace('kanji:', '');
-    const prev = reviewResults.get(ch) ?? { correct: 0, total: 0 };
-    reviewResults.set(ch, { correct: prev.correct + (isCorrect ? 1 : 0), total: prev.total + 1 });
+    trackResult(ch, isCorrect);
 
-    // Save to dedicated meta key (separate from meaning-quiz scores)
     const rdKey = await reviewDrawScoreKey();
     const existing = (await getMeta<Record<string, number>>(rdKey)) ?? {};
     existing[ch] = Math.max(existing[ch] ?? 0, score);
     await putMeta(rdKey, existing);
 
-    // Wrong draw → recorded as a WRITING mistake so Reinforce asks
-    // the user to draw it again (not just pick its meaning).
     if (!isCorrect) {
       recordMistake({ type: 'kanji-writing', id: ch }).catch(() => {});
     }
 
-    // Speak the reading aloud so the user hears what they just drew
+    // XP: drawing success is harder than choice — grant a bit more.
+    addXp(isCorrect ? 12 : 2).catch(() => {});
+
     if (display && display.kind === 'kanji' && display.kanji) {
       const r = display.kanji.kun[0] ?? display.kanji.on[0] ?? display.kanji.char;
       speakJa(r);
     }
   }
 
+  async function finishSession(): Promise<void> {
+    done = true;
+
+    // Persist per-kanji review percentages (keep best).
+    const rsKey = await reviewScoreKey();
+    const existing = (await getMeta<Record<string, number>>(rsKey)) ?? {};
+    for (const [ch, r] of reviewResults) {
+      const pct = Math.round((r.correct / r.total) * 100);
+      existing[ch] = Math.max(existing[ch] ?? 0, pct);
+    }
+    await putMeta(rsKey, existing);
+
+    // Bonus XP for completing the session + any daily-goal hit.
+    const { state: goalAfter, justHitGoal } = await addMinutes(
+      (Date.now() - sessionStartTs) / 60_000,
+    );
+    if (justHitGoal) {
+      await addXp(50).catch(() => {});
+      await onGoalHit().catch(() => {});
+    }
+
+    // Badge checks — award any new ones before navigating to /complete.
+    const streakState = await getStreakState();
+    const candidates = newlyEarnedFromEvent({
+      sessionReviews: queue.length,
+      sessionBestStreak,
+      streakDays: streakState.streakDays,
+    });
+    const earned: BadgeDef[] = [];
+    for (const id of candidates) {
+      const def = await earn(id);
+      if (def) earned.push(def);
+    }
+
+    // XP delta + level-up detection — pull final state once, diff against start.
+    const endXp = await getXpState();
+    const levelUp = endXp.level > sessionStartLevel
+      ? { from: sessionStartLevel, to: endXp.level }
+      : null;
+
+    sessionStorage.setItem(
+      'review-session-summary',
+      JSON.stringify({
+        reviews: queue.length,
+        correct: sessionCorrect,
+        bestStreak: sessionBestStreak,
+        durationSec: Math.round((Date.now() - sessionStartTs) / 1000),
+        xpGained: endXp.xp - sessionStartXp,
+        levelUp,
+        justHitGoal,
+        goalMinutes: goalAfter.goalMinutes,
+        streakDays: streakState.streakDays,
+        earnedBadges: earned.map((b) => ({ id: b.id, title: b.title, criteria: b.criteria })),
+      }),
+    );
+    push('/complete');
+  }
+
   async function advance() {
     if (idx + 1 >= queue.length) {
-      done = true;
-      // Save per-kanji review percentages (keep best)
-      const rsKey = await reviewScoreKey();
-      const existing = (await getMeta<Record<string, number>>(rsKey)) ?? {};
-      for (const [ch, r] of reviewResults) {
-        const pct = Math.round((r.correct / r.total) * 100);
-        existing[ch] = Math.max(existing[ch] ?? 0, pct);
-      }
-      await putMeta(rsKey, existing);
+      await finishSession();
     } else {
       idx += 1;
-      showBack = false;
       picked = null;
       drawScoreDone = null;
     }
   }
+
+  // ── UI derivations ────────────────────────────────────────────────
+  const progress = $derived(queue.length === 0 ? 0 : (idx + (picked !== null || drawScoreDone !== null ? 1 : 0)));
+  const encourageLine = $derived.by(() => {
+    if (correctStreak >= 7) return { bold: "On fire!", rest: `${correctStreak} in a row. Stay with the rhythm — don't rush.` };
+    if (correctStreak >= 4) return { bold: "Nice rhythm.", rest: `${correctStreak} in a row. Keep it going.` };
+    if (correctStreak >= 1) return { bold: 'Good.', rest: 'Next one when you are ready.' };
+    return { bold: 'Fresh card.', rest: 'Take a breath and read it.' };
+  });
 </script>
 
-<a class="back" href="/" use:link>← Back</a>
-{#if levelLabel}
-  <div class="filter-tag">Reviewing: {levelLabel} only</div>
-{/if}
-
-{#if done}
-  <div class="center">
-    <h2>All done for now!</h2>
-    <p class="muted">Reviewed {queue.length} card{queue.length === 1 ? '' : 's'}.</p>
-    <button class="primary" onclick={buildQueue}>Another round</button>
-  </div>
-{:else if !current || !display}
-  <div class="center muted">Loading…</div>
-{:else if cardMode === 'draw' && display.kind === 'kanji' && display.kanji}
-  <!-- ── DRAW MODE: user writes the kanji from memory ───────────────── -->
-  <div class="meta">Card {idx + 1} / {queue.length}</div>
-  <div class="draw-header">
-    <div class="draw-prompt">
-      <p class="quiz-hint">Draw this kanji:</p>
-      <div class="draw-meaning">{display.kanji.meanings.slice(0, 3).join(', ')}</div>
-    </div>
-    <div class="peek-col">
-      {#key current.id + '-peek'}
-        <RevealKanji svg={display.kanji.svg} strokeCount={Math.min(3, display.kanji.strokes)} />
-      {/key}
-      <span class="peek-hint">max 3 peeks</span>
-    </div>
-  </div>
-
-  {#key current.id + '-morph'}
-    <PracticeMorph
-      kanji={display.kanji}
-      minimal={true}
-      hideRefOnMount={true}
-      onScore={onDrawScore}
-    />
-  {/key}
-
-  {#if drawScoreDone !== null}
-    <div class="answer-reveal">
-      <div class="reveal-reading">
-        {display.kanji.on.join('、') || '—'} · {display.kanji.kun.map((r) => r.replace(/[.\-]/g, '')).join('、') || '—'}
-      </div>
-      <div class="reveal-meaning">{display.kanji.meanings.join(', ')}</div>
-      <div class="draw-score-line" class:ok={drawScoreDone >= 70} class:bad={drawScoreDone < 70}>
-        Score: {drawScoreDone} / 100 · {drawScoreDone >= 70 ? 'passed ✓' : 'try again ✗'}
-      </div>
-    </div>
-    <div class="actions single">
-      <button class="primary" onclick={advance}>
-        {idx + 1 >= queue.length ? 'Finish' : 'Next →'}
-      </button>
-    </div>
-  {/if}
-{:else}
-  <!-- ── CHOICE MODE: meaning quiz (existing) ───────────────────────── -->
-  <div class="meta">Card {idx + 1} / {queue.length}</div>
-  <div class="card">
-    {#if display.kind === 'kanji' && display.kanji}
-      <div class="kanji-big">{display.kanji.char}</div>
-      <p class="quiz-hint">What does this mean?</p>
-    {:else if display.kind === 'word' && display.word}
-      <div class="word-front">{display.word.jp}</div>
-      <div class="word-reading-hint">{display.word.reading}</div>
-      <p class="quiz-hint">What does this mean?</p>
-    {/if}
-  </div>
-
-  <div class="choices">
-    {#each choices as choice, i}
-      <button
-        class="choice-btn"
-        class:correct={picked !== null && choice === correctChoice}
-        class:wrong={picked !== null && i === picked && choice !== correctChoice}
-        class:dimmed={picked !== null && choice !== correctChoice && i !== picked}
-        disabled={picked !== null}
-        onclick={() => pickChoice(i)}
-      >
-        {choice}
-      </button>
-    {/each}
-  </div>
-
-  {#if picked !== null}
-    <!-- Show reading + meaning after answering -->
-    <div class="answer-reveal">
-      {#if display.kind === 'kanji' && display.kanji}
-        <div class="reveal-reading">{display.kanji.on.join('、')} · {display.kanji.kun.map((r) => r.replace(/[.\-]/g, '')).join('、')}</div>
-        <div class="reveal-meaning">{display.kanji.meanings.join(', ')}</div>
-      {:else if display.kind === 'word' && display.word}
-        <div class="reveal-reading">{display.word.reading}</div>
-        <div class="reveal-meaning">{display.word.meanings.join('; ')}</div>
+<div class="screen">
+  <!-- ── Topbar ──────────────────────────────────────── -->
+  <header class="topbar">
+    <a class="exit" href="/" use:link aria-label="Exit review">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
+      </svg>
+    </a>
+    <div class="topbar-right">
+      {#if levelLabel}
+        <span class="pill pill-accent">{levelLabel}</span>
+      {/if}
+      {#if queue.length > 0}
+        <span class="pill pill-mint tnum">◆ {sessionCorrect} correct</span>
+        <span class="pill pill-muted tnum">{Math.min(queue.length, progress + 1)} of {queue.length}</span>
       {/if}
     </div>
+  </header>
 
-    <div class="actions single">
-      <button class="primary" onclick={advance}>
-        {idx + 1 >= queue.length ? 'Finish' : 'Next →'}
-      </button>
+  <!-- ── Progress track ─────────────────────────────── -->
+  {#if queue.length > 0}
+    <div class="track" aria-label="Session progress">
+      {#each queue as _, i (i)}
+        <div class="track-seg" class:filled={i < progress}></div>
+      {/each}
     </div>
   {/if}
 
-  {#if display.kind === 'kanji' && display.kanji}
-    <div class="jump">
-      <a href={`/learn/${encodeURIComponent(display.kanji.char)}`} use:link>Open lesson →</a>
+  {#if done}
+    <div class="center">
+      <h2>All done for now!</h2>
+      <p class="muted">Reviewed {queue.length} card{queue.length === 1 ? '' : 's'}.</p>
+      <button class="primary" onclick={buildQueue}>Another round</button>
     </div>
-  {:else if display.kind === 'word' && display.word}
-    <div class="jump">
-      <a href={`/vocab/${encodeURIComponent(display.word.id)}`} use:link>Open card →</a>
+  {:else if !current || !display}
+    <div class="center muted">Loading…</div>
+  {:else if cardMode === 'draw' && display.kind === 'kanji' && display.kanji}
+    <!-- ── DRAW MODE ─────────────────────────────────── -->
+    <section class="review-card">
+      <div class="card-bloom" aria-hidden="true"><Blossom size={180} /></div>
+      <div class="card-inner">
+        <div class="prompt-pill-row">
+          <span class="pill pill-accent">Draw this kanji</span>
+        </div>
+        <div class="draw-meaning">{display.kanji.meanings.slice(0, 3).join(' · ')}</div>
+        <div class="peek">
+          {#key current.id + '-peek'}
+            <RevealKanji svg={display.kanji.svg} strokeCount={Math.min(3, display.kanji.strokes)} />
+          {/key}
+          <span class="peek-hint">max 3 peeks</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="canvas-wrap">
+      {#key current.id + '-morph'}
+        <PracticeMorph
+          kanji={display.kanji}
+          minimal={true}
+          hideRefOnMount={true}
+          onScore={onDrawScore}
+        />
+      {/key}
+    </section>
+
+    {#if drawScoreDone !== null}
+      <div class="answer-reveal">
+        <div class="reveal-reading jp-sans">
+          {display.kanji.on.join('、') || '—'} · {display.kanji.kun.map((r) => r.replace(/[.\-]/g, '')).join('、') || '—'}
+        </div>
+        <div class="reveal-meaning">{display.kanji.meanings.join(', ')}</div>
+        <div class="draw-score-line tnum" class:ok={drawScoreDone >= 70} class:bad={drawScoreDone < 70}>
+          Score: {drawScoreDone} / 100 · {drawScoreDone >= 70 ? 'passed ✓' : 'try again ✗'}
+        </div>
+      </div>
+      <div class="single-action">
+        <button class="primary" onclick={advance}>
+          {idx + 1 >= queue.length ? 'Finish' : 'Next →'}
+        </button>
+      </div>
+    {/if}
+  {:else}
+    <!-- ── CHOICE MODE ───────────────────────────────── -->
+    <section class="review-card">
+      <div class="card-bloom" aria-hidden="true"><Blossom size={180} /></div>
+      <div class="card-inner">
+        <div class="prompt-pill-row">
+          <span class="pill pill-accent">Read this kanji</span>
+        </div>
+        {#if display.kind === 'kanji' && display.kanji}
+          <div class="big-glyph jp-serif">{display.kanji.char}</div>
+        {:else if display.kind === 'word' && display.word}
+          <div class="big-word jp-serif">{display.word.jp}</div>
+          <div class="word-reading-hint jp-sans">{display.word.reading}</div>
+        {/if}
+        {#if picked !== null}
+          <div class="answer-reveal">
+            {#if display.kind === 'kanji' && display.kanji}
+              <div class="reveal-reading jp-sans">
+                {display.kanji.kun.map((r) => r.replace(/[.\-]/g, '')).join('、') || display.kanji.on.join('、')}
+              </div>
+              <div class="reveal-meaning">
+                {display.kanji.meanings.join(', ')}
+                {#if display.kanji.on.length > 0}<span class="secondary"> · {display.kanji.on.join('、')}</span>{/if}
+              </div>
+            {:else if display.kind === 'word' && display.word}
+              <div class="reveal-reading jp-sans">{display.word.reading}</div>
+              <div class="reveal-meaning">{display.word.meanings.join('; ')}</div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    </section>
+
+    <div class="choices">
+      {#each choices as choice, i}
+        <button
+          class="choice-btn"
+          class:correct={picked !== null && choice === correctChoice}
+          class:wrong={picked !== null && i === picked && choice !== correctChoice}
+          class:dimmed={picked !== null && choice !== correctChoice && i !== picked}
+          disabled={picked !== null}
+          onclick={() => pickChoice(i)}
+        >
+          {choice}
+        </button>
+      {/each}
+    </div>
+
+    {#if picked !== null}
+      <div class="single-action">
+        <button class="primary" onclick={advance}>
+          {idx + 1 >= queue.length ? 'Finish' : 'Next →'}
+        </button>
+      </div>
+    {/if}
+  {/if}
+
+  {#if !done && queue.length > 0}
+    <div class="encourage">
+      <span class="encourage-icon" aria-hidden="true"><Petal size={14} /></span>
+      <span><b>{encourageLine.bold}</b> {encourageLine.rest}</span>
     </div>
   {/if}
-{/if}
+
+  {#if !done && display}
+    <div class="jump">
+      {#if display.kind === 'kanji' && display.kanji}
+        <a href={`/learn/${encodeURIComponent(display.kanji.char)}`} use:link>Open lesson →</a>
+      {:else if display.kind === 'word' && display.word}
+        <a href={`/vocab/${encodeURIComponent(display.word.id)}`} use:link>Open card →</a>
+      {/if}
+    </div>
+  {/if}
+</div>
 
 <style>
-  .back { display: inline-block; padding: 0.75rem 1rem; color: var(--fg-dim); }
-  .filter-tag {
-    text-align: center;
-    font-size: 0.85rem;
-    color: var(--accent);
-    padding: 0.25rem 0;
-    letter-spacing: 0.03em;
+  .screen {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 16px 16px 40px;
   }
-  .center { padding: 2rem; text-align: center; }
-  .meta { text-align: center; color: var(--fg-dim); font-size: 0.85rem; padding: 0.5rem; }
-  .card {
-    background: var(--bg-alt);
+
+  /* ── Topbar ─────────────────────────────────────────────── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .exit {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
     border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 2rem 1.5rem;
-    margin: 0.5rem 1rem;
+    background: var(--surface);
+    color: var(--ink-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+  }
+  .topbar-right { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+  }
+  .pill-accent { background: var(--accent-soft); color: var(--accent); }
+  .pill-mint { background: var(--mint); color: white; }
+  .pill-muted { background: var(--surface-2); color: var(--ink-2); }
+
+  /* ── Progress track ─────────────────────────────────────── */
+  .track {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+  }
+  .track-seg {
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    transition: background 0.3s ease;
+  }
+  .track-seg.filled {
+    background: var(--gradient-brand);
+    border-color: transparent;
+  }
+
+  /* ── Review card ────────────────────────────────────────── */
+  .review-card {
+    border-radius: 28px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+    padding: 24px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .card-bloom {
+    position: absolute;
+    right: -30px;
+    top: -30px;
+    color: var(--accent-2);
+    opacity: 0.08;
+    pointer-events: none;
+  }
+  .card-inner { position: relative; z-index: 1; }
+  .prompt-pill-row {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 10px;
+  }
+  .big-glyph {
+    font-size: 160px;
     text-align: center;
-    min-height: 14rem;
+    color: var(--ink);
+    line-height: 1;
+    margin: 10px 0 16px;
+    letter-spacing: -0.02em;
+  }
+  .big-word {
+    font-size: 72px;
+    text-align: center;
+    color: var(--ink);
+    line-height: 1;
+    margin: 10px 0 4px;
+  }
+  .word-reading-hint {
+    text-align: center;
+    color: var(--accent);
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+  .draw-meaning {
+    font-size: 22px;
+    text-align: center;
+    color: var(--ink);
+    font-weight: 800;
+    line-height: 1.2;
+    margin: 8px 0 14px;
+  }
+  .peek {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 1rem;
+    gap: 4px;
   }
-  .word-front { font-size: 3rem; font-family: 'Hiragino Mincho ProN', serif; }
-  .back-body { display: flex; flex-direction: column; gap: 0.5rem; align-items: center; }
-  .readings { display: flex; gap: 1.5rem; color: var(--fg-dim); }
-  .lbl { color: var(--fg-dim); font-size: 0.75rem; text-transform: uppercase; margin-right: 0.4em; }
-  .reading { color: var(--fg-dim); font-size: 1.3rem; }
-  .en { font-size: 1.1rem; }
-  .quiz-hint { color: var(--fg-dim); font-size: 0.9rem; margin: 0; }
-  .word-reading-hint { color: var(--accent); font-size: 1.2rem; }
+  .peek-hint {
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.03em;
+  }
+
+  .answer-reveal {
+    text-align: center;
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+  .reveal-reading {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .reveal-meaning {
+    font-size: 14px;
+    color: var(--ink-2);
+  }
+  .reveal-meaning .secondary { color: var(--muted); }
+  .draw-score-line {
+    font-size: 13px;
+    margin-top: 6px;
+    font-weight: 700;
+  }
+  .draw-score-line.ok { color: var(--mint); }
+  .draw-score-line.bad { color: var(--rose); }
+
+  /* Canvas wrap for draw-mode */
+  .canvas-wrap {
+    border-radius: 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 16px;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 12px;
+  }
+
+  /* ── Choices ────────────────────────────────────────────── */
   .choices {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    max-width: 500px;
-    margin: 0 auto;
+    gap: 8px;
+    max-width: 560px;
+    margin: 0 auto 12px;
   }
   .choice-btn {
     width: 100%;
-    padding: 0.9rem 1rem;
-    border-radius: 12px;
-    background: var(--bg-alt);
+    padding: 14px 16px;
+    border-radius: 18px;
+    background: var(--surface);
     border: 1.5px solid var(--border);
-    color: var(--fg);
-    font-size: 0.95rem;
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 700;
     text-align: left;
     cursor: pointer;
-    transition: background 0.12s, border-color 0.12s;
+    transition: background 0.12s, border-color 0.12s, opacity 0.15s;
   }
   .choice-btn:hover:not(:disabled) {
-    background: var(--bg-elevated);
-    border-color: var(--fg-dim);
+    background: var(--surface-2);
+    border-color: var(--border-strong);
   }
   .choice-btn.correct {
-    background: rgba(94, 202, 124, 0.2);
-    border-color: var(--ok);
-    color: var(--ok);
+    background: color-mix(in oklab, var(--mint) 18%, var(--surface));
+    border-color: var(--mint);
+    color: var(--mint);
   }
   .choice-btn.wrong {
-    background: rgba(255, 107, 107, 0.2);
-    border-color: var(--err);
-    color: var(--err);
+    background: color-mix(in oklab, var(--rose) 18%, var(--surface));
+    border-color: var(--rose);
+    color: var(--rose);
   }
-  .choice-btn.dimmed {
-    opacity: 0.4;
-  }
-  .answer-reveal {
-    text-align: center;
-    padding: 0.75rem 1rem 0;
-  }
-  .reveal-reading {
-    font-size: 1.2rem;
-    color: var(--accent);
-    font-family: 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
-  }
-  .reveal-meaning {
-    font-size: 0.95rem;
-    color: var(--fg);
-    margin-top: 0.25rem;
-  }
-  .actions { display: flex; gap: 0.5rem; padding: 1rem; justify-content: center; }
-  .actions.single button { min-width: 12rem; }
-  .jump { text-align: center; padding: 0.5rem 1rem 2rem; }
-  .muted { color: var(--fg-dim); }
-  /* Horizontal layout for the draw prompt + peek hint to save vertical space */
-  .draw-header {
+  .choice-btn.dimmed { opacity: 0.4; }
+
+  .single-action {
     display: flex;
-    align-items: center;
     justify-content: center;
-    gap: 1rem;
-    padding: 0.75rem 1rem;
-    max-width: 560px;
-    margin: 0 auto;
+    padding: 8px 0 12px;
   }
-  .draw-prompt { flex: 1; min-width: 0; text-align: center; }
-  .draw-meaning {
-    font-size: 1.15rem;
-    color: var(--accent);
-    margin-top: 0.25rem;
+  .single-action button {
+    min-width: 12rem;
+    padding: 14px 20px;
+    font-size: 15px;
+    font-weight: 800;
+    border-radius: 18px;
+    background: var(--gradient-brand);
+    color: #fff;
+    border: none;
+    box-shadow: var(--shadow-sm);
   }
-  .peek-col {
+  :global([data-theme='washi']) .single-action button { color: #2B231A; }
+
+  .encourage {
+    margin-top: 16px;
+    padding: 10px 14px;
+    background: var(--accent-soft);
+    border-radius: 14px;
+    font-size: 13px;
+    color: var(--ink);
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 0.25rem;
-    flex-shrink: 0;
+    gap: 8px;
   }
-  .peek-hint {
-    color: var(--fg-dim);
-    font-size: 0.7rem;
-    letter-spacing: 0.03em;
+  .encourage-icon { color: var(--accent); display: inline-flex; }
+
+  .jump {
+    text-align: center;
+    padding: 12px 0 4px;
+    font-size: 13px;
   }
-  .draw-score-line {
-    font-size: 1rem;
-    font-variant-numeric: tabular-nums;
-    margin-top: 0.5rem;
+
+  .center {
+    padding: 2rem;
+    text-align: center;
   }
-  .draw-score-line.ok { color: var(--ok); }
-  .draw-score-line.bad { color: var(--err); }
+  .muted { color: var(--muted); }
+
+  @media (max-width: 420px) {
+    .big-glyph { font-size: 128px; }
+  }
 </style>

@@ -51,9 +51,42 @@
 
   // KanjiVG viewBox + how many points to resample per stroke during morph.
   const VB = 109;
-  // Literal colors for SVG attributes (same as KanjiCanvas).
-  const C_FG = '#e8e8ea';
-  const C_ACCENT = '#ff7a59';
+  /** Resolve theme colors at use-time so SVG attributes + canvas strokes
+   *  re-theme instantly when the user swaps palette from Settings. */
+  function cssVar(name: string, fallback: string): string {
+    if (typeof document === 'undefined') return fallback;
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+  const accentColor = () => cssVar('--accent', '#E76A3A');
+  const inkColor    = () => cssVar('--ink-2', '#5F4E3A');
+
+  /** Parse `#rgb` / `#rrggbb` / `rgb(r, g, b)` → [r, g, b]. Used by the morph
+   *  animation which has to lerp in RGB space. Returns null on anything else
+   *  (e.g. color-mix() results) so the caller can fall back sensibly. */
+  function hexToRgb(s: string): [number, number, number] | null {
+    const t = s.trim();
+    if (t.startsWith('#')) {
+      const hex = t.slice(1);
+      if (hex.length === 3) {
+        return [
+          parseInt(hex[0] + hex[0], 16),
+          parseInt(hex[1] + hex[1], 16),
+          parseInt(hex[2] + hex[2], 16),
+        ];
+      }
+      if (hex.length === 6) {
+        return [
+          parseInt(hex.slice(0, 2), 16),
+          parseInt(hex.slice(2, 4), 16),
+          parseInt(hex.slice(4, 6), 16),
+        ];
+      }
+    }
+    const m = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/.exec(t);
+    if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+    return null;
+  }
 
   // ── reference animation state ─────────────────────────────────────────
   let animating = $state(false);
@@ -179,13 +212,16 @@
 
   function redraw() {
     clearCanvas();
+    // Keep upstream's length-keyed taper (drawStroke's third arg), but pull
+    // the color from the active theme so strokes re-theme on palette swap.
+    const c = accentColor();
     for (let i = 0; i < userStrokes.length; i++) {
       const ref = refPaths[i];
-      drawStroke(userStrokes[i], '#ff7a59', ref ? ref.getTotalLength() : undefined);
+      drawStroke(userStrokes[i], c, ref ? ref.getTotalLength() : undefined);
     }
     if (drawing && currentPoints.length) {
       const ref = refPaths[userStrokes.length];
-      drawStroke(currentPoints, '#ff7a59', ref ? ref.getTotalLength() : undefined);
+      drawStroke(currentPoints, c, ref ? ref.getTotalLength() : undefined);
     }
   }
 
@@ -208,11 +244,13 @@
     const NS = 'http://www.w3.org/2000/svg';
     const g = document.createElementNS(NS, 'g');
     g.setAttribute('class', 'stroke-num');
+    // Marker color tracks theme via `currentColor` + inline `color`.
+    g.setAttribute('style', 'color: var(--accent);');
     const c = document.createElementNS(NS, 'circle');
     c.setAttribute('cx', String(x));
     c.setAttribute('cy', String(y));
     c.setAttribute('r', '7');
-    c.setAttribute('fill', C_ACCENT);
+    c.setAttribute('fill', 'currentColor');
     c.setAttribute('stroke', '#fff');
     c.setAttribute('stroke-width', '1');
     const t = document.createElementNS(NS, 'text');
@@ -261,7 +299,10 @@
       const p = refPaths[i];
       const len = p.getTotalLength();
       p.setAttribute('opacity', '1');
-      p.setAttribute('stroke', C_ACCENT);
+      // `stroke=currentColor` + `style.color = var(--…)` so swapping theme
+      // later re-themes already-completed paths automatically.
+      p.setAttribute('stroke', 'currentColor');
+      p.style.color = 'var(--accent)';
       p.setAttribute('stroke-dasharray', `${len}`);
       p.setAttribute('stroke-dashoffset', `${len}`);
       void p.getBoundingClientRect();
@@ -269,7 +310,7 @@
       p.setAttribute('stroke-dashoffset', '0');
       animTimer = setTimeout(() => {
         p.style.transition = '';
-        p.setAttribute('stroke', C_FG);
+        p.style.color = 'var(--ink-2)';
         p.setAttribute('opacity', '0.85');
         const start = p.getPointAtLength(0);
         addStrokeNumber(start.x, start.y, i + 1);
@@ -467,6 +508,12 @@
     const sy = canvas.height / VB;
     const start = performance.now();
 
+    // Morph lerps stroke color from the user's drawing color → the reference
+    // ink color. Resolve both from the current theme so Neon / Sakura don't
+    // end the animation in a stale Washi gray.
+    const startRGB = hexToRgb(accentColor()) ?? [231, 106, 58];
+    const endRGB   = hexToRgb(inkColor())    ?? [95, 78, 58];
+
     await new Promise<void>((resolve) => {
       function frame(now: number) {
         if (!ctx) return;
@@ -482,9 +529,9 @@
 
         for (const [u, r] of pairs) {
           const lerp = (a: number, b: number) => a + (b - a) * e;
-          const cr = Math.round(lerp(255, 232));
-          const cg = Math.round(lerp(122, 232));
-          const cb = Math.round(lerp(89, 234));
+          const cr = Math.round(lerp(startRGB[0], endRGB[0]));
+          const cg = Math.round(lerp(startRGB[1], endRGB[1]));
+          const cb = Math.round(lerp(startRGB[2], endRGB[2]));
           ctx.strokeStyle = `rgb(${cr}, ${cg}, ${cb})`;
 
           // Taper fades into the reference's uniform weight as morph progresses.
@@ -591,12 +638,9 @@
 </script>
 
 <div class="hint-row">
-  <span class="big">
-    Draw <b>{requiredCount}</b> strokes
-  </span>
-  <span class="counter">({drawnCount} / {requiredCount})</span>
+  <span class="hint-copy">Draw <b class="tnum">{requiredCount}</b> stroke{requiredCount === 1 ? '' : 's'} <span class="counter tnum">({drawnCount} / {requiredCount})</span></span>
   {#if best !== null}
-    <span class="best-inline">· best <b>{best}</b></span>
+    <span class="best-inline tnum">best <b>{best}</b></span>
   {/if}
 </div>
 
@@ -610,6 +654,17 @@
     onpointercancel={onUp}
   ></canvas>
 </div>
+
+<!-- ── Stroke progress bar ────────────────────────────────────────
+     One pill segment per required stroke, filled with the theme
+     accent as the user completes them. Matches the handoff spec. -->
+{#if requiredCount > 0}
+  <div class="stroke-bar" aria-label="Stroke progress">
+    {#each { length: requiredCount } as _, i (i)}
+      <div class="seg" class:filled={i < drawnCount}></div>
+    {/each}
+  </div>
+{/if}
 
 <!-- Score + history strip. Visible whenever there's *any* signal to show:
      a brand-new score this session, or a history strip hydrated from IDB. -->
@@ -679,56 +734,66 @@
 
 <style>
   .hint-row {
-    text-align: center;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
     margin-bottom: 0.75rem;
-    color: var(--fg-dim);
-    font-size: 0.95rem;
+    padding: 0 0.25rem;
+    color: var(--ink-2);
+    font-size: 0.9rem;
   }
-  .big {
-    color: var(--fg);
-    font-size: 1.05rem;
-  }
-  .counter {
-    color: var(--fg-dim);
-    margin-left: 0.5rem;
-    font-variant-numeric: tabular-nums;
-  }
+  .hint-copy { color: var(--ink-2); font-weight: 600; }
+  .hint-copy b { color: var(--ink); font-weight: 800; }
+  .counter { color: var(--muted); margin-left: 0.35rem; }
   .best-inline {
-    color: var(--fg-dim);
-    margin-left: 0.5rem;
-    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
-  .best-inline b {
-    color: var(--accent);
-  }
+  .best-inline b { color: var(--accent); }
 
+  /* ── Canvas ───────────────────────────────────────────────────── */
+  /* All paper-layers stack on `.wrap`'s own `background` so the canvas +
+     reference SVG (children) paint *on top* of them cleanly. Previously
+     the halo lived on `::after`, which sat above the canvas and washed
+     out the user's strokes. */
   .wrap {
     position: relative;
     width: min(80vw, 420px);
     aspect-ratio: 1 / 1;
     margin: 0 auto;
-    background: linear-gradient(135deg, #2a2a32, #20202a);
-    border-radius: 20px;
+    border-radius: 16px;
     border: 1px solid var(--border);
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    box-shadow: var(--shadow-sm);
     overflow: hidden;
-    /* Prevent text-selection handles on iPad when drawing strokes */
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
-  }
-  .wrap::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background:
-      linear-gradient(to right, transparent calc(50% - 1px), rgba(255, 255, 255, 0.05) calc(50% - 1px), rgba(255, 255, 255, 0.05) calc(50% + 1px), transparent calc(50% + 1px)),
-      linear-gradient(to bottom, transparent calc(50% - 1px), rgba(255, 255, 255, 0.05) calc(50% - 1px), rgba(255, 255, 255, 0.05) calc(50% + 1px), transparent calc(50% + 1px));
-    pointer-events: none;
+
+    /* Layered background (topmost first):
+       1. 25% × 25% grid lines drawn in `--border` (light-tan on Washi,
+          faint white on Neon).
+       2. Soft accent-soft halo centered behind the glyph.
+       3. Base surface-2 paper fill.
+       All three are background layers — nothing sits *over* the canvas. */
+    background-color: var(--surface-2);
+    background-image:
+      linear-gradient(to right, var(--border) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--border) 1px, transparent 1px),
+      radial-gradient(circle at 50% 50%, var(--accent-soft) 0%, transparent 55%);
+    background-size: 25% 25%, 25% 25%, 100% 100%;
+    background-position: 0 0, 0 0, center center;
+    background-repeat: repeat, repeat, no-repeat;
   }
   .stage {
     position: absolute;
     inset: 0;
+    /* Default stroke color for the reference SVG. Paths inject with
+       `stroke="currentColor"` so this flows through. */
+    color: var(--ink-2);
   }
   canvas {
     position: absolute;
@@ -736,6 +801,26 @@
     width: 100%;
     height: 100%;
     touch-action: none;
+  }
+
+  /* ── Stroke progress bar (below canvas) ─────────────────────── */
+  .stroke-bar {
+    max-width: 420px;
+    margin: 0.9rem auto 0;
+    display: flex;
+    gap: 4px;
+  }
+  .seg {
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    transition: background 0.25s ease, border-color 0.25s ease;
+  }
+  .seg.filled {
+    background: var(--accent);
+    border-color: transparent;
   }
 
   /* ── score + history ───────────────────────────────────────────── */
@@ -746,10 +831,11 @@
     grid-template-columns: auto 1fr;
     gap: 1rem;
     align-items: center;
-    background: var(--bg-alt);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 14px;
     padding: 0.85rem 1rem;
+    box-shadow: var(--shadow-sm);
     animation: fade-in 0.25s ease-out;
   }
   .score-big {
@@ -759,24 +845,25 @@
     font-variant-numeric: tabular-nums;
     padding: 0.25rem 0.8rem;
     border-radius: 12px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--surface-2);
   }
   .score-big .num {
     font-size: 2.1rem;
     font-weight: 800;
     line-height: 1;
+    color: var(--ink);
   }
   .score-big .lbl {
     font-size: 0.85rem;
-    color: var(--fg-dim);
+    color: var(--muted);
   }
   .score-big.gold .num {
-    color: #ffd24a;
-    text-shadow: 0 0 18px rgba(255, 210, 74, 0.45);
+    color: #E6A33D;
+    text-shadow: 0 0 18px rgba(230, 163, 61, 0.35);
   }
   .score-big.mid  .num { color: var(--accent); }
-  .score-big.bad  .num { color: var(--err); }
-  .score-big.muted-big .num { color: var(--fg-dim); }
+  .score-big.bad  .num { color: var(--rose); }
+  .score-big.muted-big .num { color: var(--muted); }
   .score-big.muted-big .lbl { font-size: 0.7rem; }
 
   .score-side { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
@@ -789,23 +876,23 @@
     font-size: 0.7rem;
     padding: 0.15rem 0.5rem;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--surface-2);
     border: 1px solid var(--border);
     font-variant-numeric: tabular-nums;
-    color: var(--fg-dim);
+    color: var(--ink-2);
   }
-  .pill.good { color: var(--ok); border-color: rgba(94, 202, 124, 0.35); }
-  .pill.mid  { color: var(--accent); border-color: rgba(255, 122, 89, 0.35); }
-  .pill.bad  { color: var(--err); border-color: rgba(255, 107, 107, 0.35); }
-  .pill.latest { box-shadow: 0 0 0 2px rgba(255, 122, 89, 0.25); font-weight: 700; }
+  .pill.good { color: var(--mint); border-color: color-mix(in oklab, var(--mint) 45%, transparent); }
+  .pill.mid  { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+  .pill.bad  { color: var(--rose); border-color: color-mix(in oklab, var(--rose) 45%, transparent); }
+  .pill.latest { box-shadow: 0 0 0 2px var(--accent-soft); font-weight: 700; }
 
   .delta {
     font-size: 0.75rem;
-    color: var(--fg-dim);
+    color: var(--muted);
     font-variant-numeric: tabular-nums;
   }
-  .delta.up { color: var(--ok); }
-  .delta.down { color: var(--err); }
+  .delta.up { color: var(--mint); }
+  .delta.down { color: var(--rose); }
   .delta.muted { font-style: italic; }
 
   /* ── callout card ──────────────────────────────────────────────── */
@@ -814,22 +901,24 @@
     width: 100%;
     max-width: 420px;
     margin: 0.75rem auto 0;
-    background: linear-gradient(135deg, rgba(124, 92, 255, 0.16), rgba(124, 92, 255, 0.04));
-    border: 1px solid rgba(124, 92, 255, 0.35);
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
     border-radius: 14px;
     padding: 0.85rem 1rem;
     text-align: center;
-    color: var(--fg);
+    color: var(--ink);
     animation: fade-in 0.4s ease-out;
     cursor: pointer;
   }
-  .callout-card:hover { border-color: rgba(124, 92, 255, 0.55); }
+  .callout-card:hover {
+    border-color: color-mix(in oklab, var(--accent) 60%, transparent);
+  }
   .tag-label {
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--fg-dim);
-    font-weight: 600;
+    color: var(--muted);
+    font-weight: 700;
     margin-bottom: 0.35rem;
     display: flex;
     justify-content: space-between;
@@ -838,35 +927,36 @@
   .hint-tap {
     text-transform: none;
     letter-spacing: 0;
-    font-weight: 400;
-    opacity: 0.8;
+    font-weight: 500;
+    opacity: 0.85;
   }
   .tag-jp {
-    font-family: 'Hiragino Mincho ProN', serif;
+    font-family: 'Shippori Mincho', 'Hiragino Mincho ProN', serif;
     font-size: 1.5rem;
     line-height: 1.1;
+    color: var(--ink);
   }
   .tag-reading {
     font-size: 0.9rem;
-    color: var(--fg-dim);
+    color: var(--ink-2);
     margin-left: 0.4rem;
-    font-family: 'Hiragino Sans', system-ui;
+    font-family: 'Noto Sans JP', 'Hiragino Sans', system-ui;
   }
   .tag-en {
-    color: var(--fg-dim);
+    color: var(--ink-2);
     font-size: 0.85rem;
     margin: 0.25rem 0 0.6rem;
   }
   .tag-sentence {
-    font-family: 'Hiragino Mincho ProN', serif;
+    font-family: 'Shippori Mincho', 'Hiragino Mincho ProN', serif;
     font-size: 1.1rem;
-    color: var(--fg);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--ink);
+    border-top: 1px solid var(--border);
     padding-top: 0.6rem;
     margin-top: 0.25rem;
   }
   .tag-sentence-en {
-    color: var(--fg-dim);
+    color: var(--ink-2);
     font-size: 0.85rem;
     margin-top: 0.3rem;
   }
@@ -885,12 +975,13 @@
   }
   .row button {
     min-width: 8rem;
-    padding: 0.8rem 1rem;
-    font-size: 0.95rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 700;
+    border-radius: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--ink);
   }
-  .row button.tertiary {
-    background: transparent;
-    border-color: rgba(255, 255, 255, 0.12);
-    color: var(--fg-dim);
-  }
+  .row button:disabled { opacity: 0.45; cursor: not-allowed; }
 </style>

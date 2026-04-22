@@ -2,23 +2,40 @@
   import { onMount } from 'svelte';
   import { link } from 'svelte-spa-router';
   import { getToken, setToken, clearToken, syncNow, getLastSync, schedulePush } from '../lib/data/sync';
-  import { getMeta, putMeta } from '../lib/data/db';
+  import { getMeta, putMeta, getAllBestScores } from '../lib/data/db';
   import { setNativeModeCache } from '../lib/data/mode';
   import type { ClearedMistake, Mistake } from '../lib/data/mistakes';
   import { getFuriganaMode, setFuriganaMode, type FuriganaMode } from '../lib/data/furiganaMode';
+  import { getDisplayName, setDisplayName } from '../lib/gamification/displayName';
+  import { getGoalState, setGoalMinutes } from '../lib/gamification/goal';
+  import { getStreakState } from '../lib/gamification/streak';
 
+  type Theme = 'washi' | 'neon' | 'sakura';
+  const THEMES: { id: Theme; name: string; subtitle: string; swatch: [string, string, string] }[] = [
+    { id: 'washi',  name: 'Warm Washi', subtitle: 'Paper & sunset — calm & traditional', swatch: ['#FBF4E6', '#E76A3A', '#F2B138'] },
+    { id: 'neon',   name: 'Neon City',  subtitle: 'Late-night study — dark with glow',   swatch: ['#0B0D1C', '#FF4D8F', '#7C5CFF'] },
+    { id: 'sakura', name: 'Sakura',     subtitle: 'Pastel spring — bright & friendly',   swatch: ['#FFF3F6', '#FF6FA5', '#FFB070'] },
+  ];
+  let currentTheme = $state<Theme>('washi');
+
+  async function selectTheme(t: Theme): Promise<void> {
+    currentTheme = t;
+    document.documentElement.setAttribute('data-theme', t);
+    await putMeta('theme', t);
+    schedulePush();
+  }
+
+  // ── Sync / token ─────────────────────────────────────────────
   let token = $state<string | null>(null);
   let tokenInput = $state('');
   let syncing = $state(false);
   let syncResult = $state<{ ok: boolean; error?: string } | null>(null);
   let lastSync = $state<number | null>(null);
-  let nativeMode = $state(false);
 
   function maskToken(t: string): string {
     if (t.length <= 8) return '****';
     return t.slice(0, 4) + '****' + t.slice(-4);
   }
-
   function timeAgo(ts: number): string {
     const mins = Math.round((Date.now() - ts) / 60000);
     if (mins < 1) return 'just now';
@@ -27,7 +44,6 @@
     if (hrs < 24) return `${hrs} hr ago`;
     return `${Math.round(hrs / 24)} days ago`;
   }
-
   async function refreshState() {
     token = await getToken();
     lastSync = await getLastSync();
@@ -35,7 +51,7 @@
     await refreshMistakeCounts();
   }
 
-  // ── Mistake list management ──────────────────────────────────────────
+  // ── Mistakes ──────────────────────────────────────────────────
   let regularMistakeCount = $state(0);
   let nativeMistakeCount = $state(0);
   let clearingMistakes = $state(false);
@@ -45,10 +61,6 @@
     regularMistakeCount = ((await getMeta<Mistake[]>('mistakes')) ?? []).length;
     nativeMistakeCount = ((await getMeta<Mistake[]>('native-mistakes')) ?? []).length;
   }
-
-  /** Clear every open mistake across BOTH mode lists AND write tombstones
-   *  so they don't resurrect from a stale gist push on another device.
-   *  Also triggers a sync push so the empty state propagates immediately. */
   async function handleClearAllMistakes() {
     if (clearingMistakes) return;
     if (!confirm('Clear every open mistake on this device (regular + native)? This does NOT affect your scores or SRS state.')) return;
@@ -62,7 +74,6 @@
       ]) {
         const active = (await getMeta<Mistake[]>(listKey)) ?? [];
         if (active.length === 0) continue;
-        // Upsert tombstones: one per (type, id), clearedAt = now.
         const existing = (await getMeta<ClearedMistake[]>(tombKey)) ?? [];
         const byKey = new Map<string, ClearedMistake>();
         for (const c of existing) byKey.set(`${c.type}:${c.id}`, c);
@@ -73,7 +84,6 @@
         await putMeta(listKey, []);
       }
       await refreshMistakeCounts();
-      // Trigger a gist push so the cleared state + tombstones propagate now.
       schedulePush();
       clearMistakesResult = 'All mistakes cleared. Sync scheduled.';
     } catch (e) {
@@ -83,26 +93,58 @@
     }
   }
 
+  // ── Prefs ─────────────────────────────────────────────────────
   let furiganaMode = $state<FuriganaMode>(getFuriganaMode());
-
-  onMount(async () => {
-    await refreshState();
-    nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
-    furiganaMode = getFuriganaMode();
-  });
+  let nativeMode = $state(false);
+  let displayName = $state('');
+  let goalMinutes = $state(10);
 
   async function handleFuriganaChange() {
     await setFuriganaMode(furiganaMode);
     schedulePush();
   }
-
   async function handleNativeToggle() {
     await putMeta('native-mode', nativeMode);
     setNativeModeCache(nativeMode);
     schedulePush();
-    // Force Home to re-mount with the new mode by navigating.
     window.location.hash = '#/';
   }
+  async function handleDisplayNameBlur() {
+    await setDisplayName(displayName);
+    schedulePush();
+  }
+  async function handleGoalChange() {
+    const v = Math.max(1, Math.min(240, Math.round(goalMinutes)));
+    goalMinutes = v;
+    await setGoalMinutes(v);
+    schedulePush();
+  }
+
+  // ── Your progress snapshot ───────────────────────────────────
+  let masteredCount = $state(0);
+  let goldCount = $state(0);
+  let streakDays = $state(0);
+
+  async function refreshProgress(): Promise<void> {
+    const scores = await getAllBestScores();
+    const values = [...scores.values()];
+    masteredCount = values.filter((v) => v >= 80).length;
+    goldCount = values.filter((v) => v >= 85).length;
+    const s = await getStreakState();
+    streakDays = s.streakDays;
+  }
+
+  onMount(async () => {
+    await refreshState();
+    nativeMode = (await getMeta<boolean>('native-mode')) ?? false;
+    furiganaMode = getFuriganaMode();
+    const storedTheme = await getMeta<Theme>('theme');
+    if (storedTheme && THEMES.some((t) => t.id === storedTheme)) currentTheme = storedTheme;
+    displayName = await getDisplayName();
+    const g = await getGoalState();
+    goalMinutes = g.goalMinutes;
+    await refreshProgress();
+  });
 
   async function handleSave() {
     const trimmed = tokenInput.trim();
@@ -119,7 +161,6 @@
       syncing = false;
     }
   }
-
   async function handleSync() {
     syncing = true;
     syncResult = null;
@@ -130,7 +171,6 @@
       syncing = false;
     }
   }
-
   async function handleRemove() {
     await clearToken();
     token = null;
@@ -140,367 +180,407 @@
   }
 </script>
 
-<a class="back" href="/" use:link>← Home</a>
+<div class="screen">
+  <header class="topbar">
+    <a class="back" href="/" use:link aria-label="Back">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 18 9 12 15 6" />
+      </svg>
+    </a>
+    <h1>Settings</h1>
+  </header>
 
-<div class="container">
-  <h1 class="title">Settings</h1>
+  <!-- ── Appearance ────────────────────────────────────────── -->
+  <div class="section-label">Appearance</div>
+  <div class="theme-list">
+    {#each THEMES as t (t.id)}
+      <button
+        class="theme-card"
+        class:selected={currentTheme === t.id}
+        onclick={() => selectTheme(t.id)}
+      >
+        <div class="theme-preview" style="background: {t.swatch[0]};">
+          <div class="theme-preview-glow" style="background: radial-gradient(circle at 30% 30%, {t.swatch[1]}66, transparent 60%), radial-gradient(circle at 70% 80%, {t.swatch[2]}66, transparent 60%);"></div>
+          <div class="theme-glyph jp-serif" class:dark-glyph={t.id === 'neon'}>桜</div>
+        </div>
+        <div class="theme-meta">
+          <div class="theme-name">{t.name}</div>
+          <div class="theme-sub">{t.subtitle}</div>
+          <div class="theme-swatch">
+            {#each t.swatch as c (c)}
+              <span class="swatch-dot" style="background: {c};"></span>
+            {/each}
+          </div>
+        </div>
+        <div class="theme-radio" aria-hidden="true">
+          {#if currentTheme === t.id}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+          {/if}
+        </div>
+      </button>
+    {/each}
+  </div>
 
-  <section class="card">
-    <h2 class="section-title">Display Mode</h2>
-    <label class="toggle-field">
-      <input type="checkbox" bind:checked={nativeMode} onchange={handleNativeToggle} />
-      Native mode 🌻
-    </label>
-    <p class="desc toggle-desc">
-      Treat all kanji as mastered. Unlocks all vocabulary and review content.
-    </p>
-
-    <div class="sub-section">
-      <div class="field-label">Furigana (hiragana reading)</div>
-      <label class="radio-row">
+  <!-- ── Profile ──────────────────────────────────────────── -->
+  <div class="section-label">Profile</div>
+  <div class="card rows">
+    <label class="row-input">
+      <div class="row-icon">🌱</div>
+      <div class="row-body">
+        <div class="row-label">Display name</div>
         <input
-          type="radio"
-          name="furigana-mode"
-          value="always"
-          bind:group={furiganaMode}
-          onchange={handleFuriganaChange}
+          class="text-input"
+          placeholder="Who should we greet?"
+          bind:value={displayName}
+          onblur={handleDisplayNameBlur}
+          onkeydown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          maxlength="40"
         />
+      </div>
+    </label>
+    <label class="row-input">
+      <div class="row-icon">🎯</div>
+      <div class="row-body">
+        <div class="row-label">Daily goal</div>
+        <div class="goal-input">
+          <input
+            class="text-input tnum"
+            type="number"
+            min="1"
+            max="240"
+            bind:value={goalMinutes}
+            onblur={handleGoalChange}
+            onkeydown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          />
+          <span class="goal-unit">min / day</span>
+        </div>
+      </div>
+    </label>
+  </div>
+
+  <!-- ── Learning ─────────────────────────────────────────── -->
+  <div class="section-label">Learning</div>
+  <div class="card">
+    <div class="card-label">Furigana</div>
+    <div class="radio-group">
+      <label class="radio-row">
+        <input type="radio" name="furigana-mode" value="always" bind:group={furiganaMode} onchange={handleFuriganaChange} />
         <span>Always show</span>
       </label>
       <label class="radio-row">
-        <input
-          type="radio"
-          name="furigana-mode"
-          value="hide-mastered"
-          bind:group={furiganaMode}
-          onchange={handleFuriganaChange}
-        />
+        <input type="radio" name="furigana-mode" value="hide-mastered" bind:group={furiganaMode} onchange={handleFuriganaChange} />
         <span>Hide on mastered kanji</span>
       </label>
       <label class="radio-row">
-        <input
-          type="radio"
-          name="furigana-mode"
-          value="never"
-          bind:group={furiganaMode}
-          onchange={handleFuriganaChange}
-        />
+        <input type="radio" name="furigana-mode" value="never" bind:group={furiganaMode} onchange={handleFuriganaChange} />
         <span>Never show</span>
       </label>
     </div>
-  </section>
+  </div>
+  <div class="card tight">
+    <label class="row-toggle">
+      <div class="row-body">
+        <div class="row-label">Native mode 🌻</div>
+        <div class="row-sub">Treat all kanji as mastered. Unlocks all vocabulary and review content.</div>
+      </div>
+      <input type="checkbox" bind:checked={nativeMode} onchange={handleNativeToggle} />
+    </label>
+  </div>
 
-  <section class="card">
-    <h2 class="section-title">Gist Sync</h2>
+  <!-- ── Your progress ────────────────────────────────────── -->
+  <div class="section-label">Your progress</div>
+  <div class="card progress-card">
+    <div class="progress-col">
+      <div class="progress-val tnum">{masteredCount}</div>
+      <div class="progress-label">Mastered</div>
+    </div>
+    <div class="progress-col bordered">
+      <div class="progress-val tnum accent">{goldCount}</div>
+      <div class="progress-label">Gold</div>
+    </div>
+    <div class="progress-col">
+      <div class="progress-val tnum">{streakDays}d</div>
+      <div class="progress-label">Streak</div>
+    </div>
+  </div>
 
+  <!-- ── Gist sync ────────────────────────────────────────── -->
+  <div class="section-label">Gist sync</div>
+  <div class="card">
     {#if token}
-      <div class="field">
-        <span class="field-label">Token</span>
-        <span class="field-value mono">{maskToken(token)}</span>
-      </div>
-
-      <div class="field">
-        <span class="field-label">Last synced</span>
-        <span class="field-value">{lastSync ? timeAgo(lastSync) : 'Never synced'}</span>
-      </div>
-
+      <div class="kv-row"><span class="kv-label">Token</span><span class="kv-val mono">{maskToken(token)}</span></div>
+      <div class="kv-row"><span class="kv-label">Last synced</span><span class="kv-val">{lastSync ? timeAgo(lastSync) : 'Never synced'}</span></div>
       {#if syncResult}
         <div class="result" class:ok={syncResult.ok} class:fail={!syncResult.ok}>
-          {#if syncResult.ok}
-            Synced successfully.
-          {:else}
-            Sync failed: {syncResult.error ?? 'unknown error'}
-          {/if}
+          {syncResult.ok ? 'Synced successfully.' : `Sync failed: ${syncResult.error ?? 'unknown error'}`}
         </div>
       {/if}
-
       <div class="btn-row">
-        <button class="primary" onclick={handleSync} disabled={syncing}>
-          {#if syncing}
-            <span class="spinner"></span> Syncing...
-          {:else}
-            Sync now
-          {/if}
+        <button class="btn-primary" onclick={handleSync} disabled={syncing}>
+          {#if syncing}<span class="spinner"></span> Syncing…{:else}Sync now{/if}
         </button>
-        <button class="danger" onclick={handleRemove} disabled={syncing}>
-          Remove token
-        </button>
+        <button class="btn-danger" onclick={handleRemove} disabled={syncing}>Remove token</button>
       </div>
-
     {:else}
       <p class="desc">
-        Paste a GitHub Personal Access Token with the <code>gist</code> scope
-        to sync your progress across devices.
+        Paste a GitHub Personal Access Token with the <code>gist</code> scope to sync your progress (scores, SRS, XP, streak, theme, badges…) across devices.
       </p>
-      <p class="url-hint">
-        Create a token at github.com/settings/tokens
-      </p>
-
-      <input
-        type="password"
-        class="token-input"
-        placeholder="ghp_..."
-        bind:value={tokenInput}
-        onkeydown={(e) => e.key === 'Enter' && handleSave()}
-      />
-
-      <button class="primary save-btn" onclick={handleSave} disabled={!tokenInput.trim()}>
-        Save token
-      </button>
+      <p class="url-hint">Create a token at github.com/settings/tokens</p>
+      <input type="password" class="text-input token" placeholder="ghp_..." bind:value={tokenInput} onkeydown={(e) => e.key === 'Enter' && handleSave()} />
+      <div class="btn-row">
+        <button class="btn-primary" onclick={handleSave} disabled={!tokenInput.trim()}>Save token</button>
+      </div>
     {/if}
-  </section>
+  </div>
 
-  <section class="card">
-    <h2 class="section-title">Reinforce</h2>
-    <div class="field">
-      <span class="field-label">Open mistakes</span>
-      <span class="field-value">
+  <!-- ── Reinforce / clear mistakes ───────────────────────── -->
+  <div class="section-label">Reinforce</div>
+  <div class="card">
+    <div class="kv-row">
+      <span class="kv-label">Open mistakes</span>
+      <span class="kv-val">
         {regularMistakeCount} regular
         {#if nativeMistakeCount > 0} · {nativeMistakeCount} native{/if}
       </span>
     </div>
     <p class="desc">
-      Wipes every open mistake on this device and writes tombstones so they
-      don't return via sync. Scores, SRS state, and drawing history stay
-      intact.
+      Wipes every open mistake on this device and writes tombstones so they don't return via sync. Scores, SRS state, and drawing history stay intact.
     </p>
     {#if clearMistakesResult}
-      <div class="result" class:ok={!clearMistakesResult.startsWith('Failed')} class:fail={clearMistakesResult.startsWith('Failed')}>
-        {clearMistakesResult}
-      </div>
+      <div class="result" class:ok={!clearMistakesResult.startsWith('Failed')} class:fail={clearMistakesResult.startsWith('Failed')}>{clearMistakesResult}</div>
     {/if}
     <div class="btn-row">
       <button
-        class="danger"
+        class="btn-danger"
         onclick={handleClearAllMistakes}
         disabled={clearingMistakes || (regularMistakeCount === 0 && nativeMistakeCount === 0)}
       >
         {clearingMistakes ? 'Clearing…' : 'Clear all mistakes'}
       </button>
     </div>
-  </section>
+  </div>
 </div>
 
 <style>
+  .screen { max-width: 640px; margin: 0 auto; padding: 16px 16px 48px; }
+
+  .topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
   .back {
-    display: inline-block;
-    padding: 0.75rem 1rem;
-    color: var(--fg-dim);
-    font-size: 0.9rem;
+    width: 36px; height: 36px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--ink-2);
+    display: inline-flex; align-items: center; justify-content: center;
   }
+  h1 { font-size: 22px; font-weight: 800; color: var(--ink); margin: 0; }
 
-  .container {
-    max-width: 500px;
-    margin: 0 auto;
-    padding: 0 1rem 3rem;
+  .section-label {
+    font-size: 11px; font-weight: 800; color: var(--muted);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    margin: 16px 4px 10px;
   }
-
-  .title {
-    font-size: 1.5rem;
-    font-weight: 700;
-    margin: 0.25rem 0 1.25rem;
-  }
+  .section-label:first-of-type { margin-top: 0; }
 
   .card {
-    background: var(--bg-alt);
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 1.25rem;
-    margin-bottom: 1rem;
+    border-radius: 18px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow-sm);
+    color: var(--ink);
   }
+  .card.tight { padding: 10px 14px; }
+  .card.rows { padding: 4px 4px; }
 
-  .sub-section {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
-  }
-  .sub-section .field-label {
-    display: block;
-    font-size: 0.82rem;
-    color: var(--fg-dim);
-    margin-bottom: 0.5rem;
-  }
-  .radio-row {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    padding: 0.35rem 0;
+  /* ── Theme picker ───────────────────────────────────── */
+  .theme-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+  .theme-card {
+    all: unset;
+    padding: 12px; border-radius: 18px;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    display: flex; align-items: center; gap: 14px;
+    box-shadow: var(--shadow-sm);
     cursor: pointer;
-    font-size: 0.95rem;
-    color: var(--fg);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
-  .radio-row input[type="radio"] {
-    accent-color: var(--accent);
-    width: 1.05rem;
-    height: 1.05rem;
-    margin: 0;
-    cursor: pointer;
+  .theme-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
   }
-
-  .section-title {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--fg-dim);
-    margin: 0 0 1rem;
-    font-weight: 600;
-  }
-
-  .desc {
-    margin: 0 0 0.5rem;
-    color: var(--fg);
-    font-size: 0.92rem;
-    line-height: 1.5;
-  }
-
-  .desc code {
-    background: var(--bg-elevated);
-    padding: 0.15em 0.45em;
-    border-radius: 6px;
-    font-size: 0.88em;
-    color: var(--accent);
-  }
-
-  .url-hint {
-    margin: 0 0 1rem;
-    color: var(--fg-dim);
-    font-size: 0.82rem;
-    user-select: all;
-    -webkit-user-select: all;
-  }
-
-  .token-input {
-    display: block;
-    width: 100%;
-    padding: 0.85rem 1rem;
-    font-size: 0.95rem;
-    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-    background: var(--bg);
-    color: var(--fg);
+  .theme-preview {
+    width: 68px; height: 68px; border-radius: 14px;
+    position: relative; overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: 12px;
-    outline: none;
-    transition: border-color 0.15s;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
   }
-
-  .token-input:focus {
+  .theme-preview-glow { position: absolute; inset: 0; }
+  .theme-glyph {
+    position: relative; z-index: 1;
+    font-size: 34px; font-weight: 500;
+    color: #2B231A;
+  }
+  .theme-glyph.dark-glyph { color: #fff; }
+  .theme-meta { flex: 1; min-width: 0; }
+  .theme-name { font-weight: 800; font-size: 15px; color: var(--ink); }
+  .theme-sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .theme-swatch { display: flex; gap: 4px; margin-top: 6px; }
+  .swatch-dot {
+    width: 16px; height: 16px; border-radius: 999px;
+    border: 1px solid var(--border);
+  }
+  .theme-radio {
+    width: 22px; height: 22px; border-radius: 999px;
+    border: 2px solid var(--border-strong);
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent;
+  }
+  .theme-card.selected .theme-radio {
+    background: var(--accent);
     border-color: var(--accent);
   }
 
-  .token-input::placeholder {
-    color: var(--fg-dim);
-    opacity: 0.5;
+  /* ── Row inputs ─────────────────────────────────────── */
+  .row-input {
+    padding: 12px; display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid var(--border);
   }
-
-  .save-btn {
-    display: block;
+  .row-input:last-child { border-bottom: none; }
+  .row-icon {
+    width: 32px; height: 32px; border-radius: 10px;
+    background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+  .row-body { flex: 1; min-width: 0; }
+  .row-label { font-weight: 700; font-size: 13px; color: var(--ink); margin-bottom: 4px; }
+  .text-input {
     width: 100%;
-    margin-top: 0.75rem;
-    padding: 0.85rem;
-    font-size: 1rem;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed var(--border);
+    padding: 2px 0;
+    font: inherit;
+    font-size: 14px;
+    color: var(--ink);
+    outline: none;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .text-input:focus { border-bottom-color: var(--accent); }
+  .text-input.token {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+  .goal-input { display: flex; align-items: center; gap: 8px; }
+  .goal-input .text-input { width: 60px; }
+  .goal-unit { font-size: 13px; color: var(--ink-2); }
+
+  /* ── Furigana radios ───────────────────────────────── */
+  .card-label {
+    font-size: 12px; font-weight: 700;
+    color: var(--ink-2); margin-bottom: 8px;
+  }
+  .radio-group { display: flex; flex-direction: column; gap: 2px; }
+  .radio-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0;
+    font-size: 14px; color: var(--ink);
+    cursor: pointer;
+  }
+  .radio-row input[type='radio'] {
+    accent-color: var(--accent);
+    width: 16px; height: 16px;
+    margin: 0;
   }
 
-  .field {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.6rem 0;
-    border-bottom: 1px solid var(--border-soft);
+  .row-toggle {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 4px;
+  }
+  .row-toggle .row-body { flex: 1; }
+  .row-sub { font-size: 12px; color: var(--ink-2); line-height: 1.4; margin-top: 2px; }
+  .row-toggle input[type='checkbox'] {
+    accent-color: var(--accent);
+    width: 20px; height: 20px;
   }
 
-  .field:last-of-type {
-    border-bottom: none;
+  /* ── Progress card ──────────────────────────────────── */
+  .progress-card {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    padding: 16px 12px;
+  }
+  .progress-col { text-align: center; padding: 4px 0; }
+  .progress-col.bordered { border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+  .progress-val { font-weight: 800; font-size: 20px; color: var(--ink); }
+  .progress-val.accent { color: var(--accent); }
+  .progress-label {
+    font-size: 10px; color: var(--muted);
+    font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em;
+    margin-top: 2px;
   }
 
-  .field-label {
-    color: var(--fg-dim);
-    font-size: 0.88rem;
+  /* ── Sync & Reinforce controls ─────────────────────── */
+  .kv-row {
+    display: flex; justify-content: space-between;
+    padding: 6px 0; font-size: 13px;
+  }
+  .kv-label { color: var(--ink-2); font-weight: 700; }
+  .kv-val { color: var(--ink); }
+  .kv-val.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+  .desc { font-size: 13px; color: var(--ink-2); line-height: 1.5; margin: 8px 0; }
+  .desc code {
+    background: var(--surface-2);
+    padding: 0.15em 0.45em;
+    border-radius: 6px;
+    font-size: 0.92em;
+    color: var(--accent);
+  }
+  .url-hint {
+    font-size: 12px; color: var(--muted);
+    user-select: all; -webkit-user-select: all;
+    margin: 4px 0 10px;
   }
 
-  .field-value {
-    color: var(--fg);
-    font-size: 0.88rem;
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .btn-primary, .btn-danger {
+    padding: 10px 16px; border-radius: 12px;
+    font-weight: 800; font-size: 13px;
+    cursor: pointer; border: none;
   }
-
-  .field-value.mono {
-    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-    letter-spacing: 0.04em;
+  .btn-primary {
+    background: var(--gradient-brand);
+    color: #fff;
+    box-shadow: var(--shadow-sm);
   }
+  :global([data-theme='washi']) .btn-primary { color: #2B231A; }
+  .btn-danger {
+    background: color-mix(in oklab, var(--rose) 14%, var(--surface));
+    color: var(--rose);
+    border: 1px solid color-mix(in oklab, var(--rose) 50%, transparent);
+  }
+  .btn-primary:disabled, .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .result {
-    margin: 0.75rem 0;
-    padding: 0.65rem 0.85rem;
+    margin-top: 8px; padding: 8px 12px;
     border-radius: 10px;
-    font-size: 0.88rem;
-    text-align: center;
+    font-size: 13px;
   }
-
-  .result.ok {
-    background: rgba(94, 202, 124, 0.12);
-    border: 1px solid rgba(94, 202, 124, 0.3);
-    color: var(--ok);
-  }
-
-  .result.fail {
-    background: rgba(255, 107, 107, 0.12);
-    border: 1px solid rgba(255, 107, 107, 0.3);
-    color: var(--err);
-  }
-
-  .btn-row {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 1rem;
-  }
-
-  .btn-row button {
-    flex: 1;
-    padding: 0.75rem;
-    font-size: 0.95rem;
-  }
-
-  .danger {
-    background: transparent;
-    border: 1px solid var(--err);
-    color: var(--err);
-  }
-
-  .danger:active:not(:disabled) {
-    background: rgba(255, 107, 107, 0.12);
-  }
+  .result.ok { background: color-mix(in oklab, var(--mint) 16%, var(--surface)); color: var(--ink); border: 1px solid color-mix(in oklab, var(--mint) 40%, transparent); }
+  .result.fail { background: color-mix(in oklab, var(--rose) 14%, var(--surface)); color: var(--ink); border: 1px solid color-mix(in oklab, var(--rose) 40%, transparent); }
 
   .spinner {
-    display: inline-block;
-    width: 0.9em;
-    height: 0.9em;
-    border: 2px solid rgba(27, 27, 31, 0.3);
-    border-top-color: #1b1b1f;
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-    vertical-align: -0.1em;
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid currentColor; border-top-color: transparent;
+    border-radius: 50%; vertical-align: -2px;
   }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+  @media (prefers-reduced-motion: no-preference) {
+    .spinner { animation: gentle-spin 0.8s linear infinite; }
   }
-
-  .toggle-field {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    cursor: pointer;
-    font-size: 1rem;
-  }
-
-  .toggle-field input[type="checkbox"] {
-    width: 1.25rem;
-    height: 1.25rem;
-    accent-color: var(--accent);
-  }
-
-  .toggle-desc {
-    margin-top: 0.5rem;
-    color: var(--fg-dim);
-    font-size: 0.85rem;
-  }
+  @keyframes gentle-spin { to { transform: rotate(360deg); } }
 </style>

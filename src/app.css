@@ -1,30 +1,118 @@
-:root {
-  --bg: #14141a;
-  --bg-alt: #1f1f29;
-  --bg-elevated: #262633;
-  --fg: #f0f0f5;
-  --fg-dim: #9a9aaf;
-  --accent: #ff7a59;
-  --accent-soft: rgba(255, 122, 89, 0.18);
-  --accent-dim: #c45a3f;
-  --indigo: #7c5cff;
-  --indigo-soft: rgba(124, 92, 255, 0.18);
-  --ok: #5eca7c;
-  --err: #ff6b6b;
-  --border: #33333f;
-  --border-soft: rgba(255, 255, 255, 0.06);
-  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.25);
-  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.45);
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
+/* ══════════════════════════════════════════════════════════════════════
+   Japanese Practice — vibrant redesign tokens
+   Three user-selectable themes applied via <html data-theme="…">.
+   Persisted in IndexedDB meta key 'theme'; bootstrap lives in App.svelte.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;600;700&display=swap');
+
+/* ── Default theme: Washi (also used when no data-theme is set) ─────── */
+:root,
+[data-theme="washi"] {
+  --bg: #FBF4E6;       --bg-2: #F4E7CC;
+  --surface: #FFFDF7;  --surface-2: #FFF6DF;
+  --ink: #2B231A;      --ink-2: #5F4E3A;   --muted: #9A8870;
+  --accent: #E76A3A;   --accent-2: #F2B138;   --accent-soft: #FFE3CE;
+  --mint: #2BAE7F;     --rose: #D4447A;       --sky: #4A93C4;
+  --border: rgba(60,40,20,0.12);  --border-strong: rgba(60,40,20,0.22);
+  --shadow-sm: 0 2px 6px rgba(90,60,20,0.08);
+  --shadow-md: 0 12px 28px rgba(90,60,20,0.12);
+  --shadow-lg: 0 28px 60px rgba(90,60,20,0.18);
+  --hero-grad: radial-gradient(120% 100% at 0% 0%, #FFD79A 0%, transparent 55%),
+               radial-gradient(120% 100% at 100% 100%, #FFBFAE 0%, transparent 60%),
+               linear-gradient(135deg, #FFF1D8, #FFE0C4);
+  --tile-mastered: linear-gradient(140deg, #FFE0B8, #FFCFA0);
+  --tile-gold: linear-gradient(140deg, #FFE79A, #F2B138);
+  --tile-platinum: linear-gradient(140deg, #F5D6E5, #D9C4F0);
+  --petal: #E76A3A;
+  --gradient-brand: linear-gradient(135deg, #E76A3A, #F2B138);
+  --ring-track: rgba(60,40,20,0.10);
+  /* Legacy aliases — keep old screens rendering while migration is in-flight */
+  --bg-alt: var(--surface);
+  --bg-elevated: var(--surface-2);
+  --fg: var(--ink);
+  --fg-dim: var(--muted);
+  --indigo: var(--accent-2);
+  --indigo-soft: var(--accent-soft);
+  --ok: var(--mint);
+  --err: var(--rose);
+  --border-soft: var(--border);
+  color-scheme: light;
+}
+
+[data-theme="neon"] {
+  --bg: #0B0D1C;       --bg-2: #13152A;
+  --surface: #171A33;  --surface-2: #20244A;
+  --ink: #F5F0FF;      --ink-2: #C9C4E8;   --muted: #807CA8;
+  --accent: #FF4D8F;   --accent-2: #7C5CFF; --accent-soft: rgba(255,77,143,0.18);
+  --mint: #2EE6A6;     --rose: #FF4D8F;     --sky: #39D6FF;
+  --border: rgba(255,255,255,0.10);  --border-strong: rgba(255,255,255,0.18);
+  --shadow-sm: 0 4px 12px rgba(0,0,0,0.35);
+  --shadow-md: 0 16px 36px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04);
+  --shadow-lg: 0 28px 60px rgba(0,0,0,0.6);
+  --hero-grad: radial-gradient(120% 100% at 0% 0%, rgba(124,92,255,0.6) 0%, transparent 55%),
+               radial-gradient(120% 100% at 100% 100%, rgba(255,77,143,0.55) 0%, transparent 60%),
+               linear-gradient(135deg, #1A1A3A, #0F1020);
+  --tile-mastered: linear-gradient(140deg, rgba(46,230,166,0.18), rgba(46,230,166,0.04));
+  --tile-gold: linear-gradient(140deg, #FFD24A, #FF8F1F);
+  --tile-platinum: linear-gradient(140deg, rgba(124,92,255,0.35), rgba(57,214,255,0.25));
+  --petal: #FF4D8F;
+  --gradient-brand: linear-gradient(135deg, #FF4D8F, #7C5CFF 55%, #39D6FF);
+  --ring-track: rgba(255,255,255,0.08);
+  --bg-alt: var(--surface);
+  --bg-elevated: var(--surface-2);
+  --fg: var(--ink);
+  --fg-dim: var(--muted);
+  --indigo: var(--accent-2);
+  --indigo-soft: rgba(124,92,255,0.18);
+  --ok: var(--mint);
+  --err: var(--rose);
+  --border-soft: var(--border);
   color-scheme: dark;
+}
+
+[data-theme="sakura"] {
+  --bg: #FFF3F6;       --bg-2: #FFE4EE;
+  --surface: #FFFFFF;  --surface-2: #FFEDF3;
+  --ink: #3D2838;      --ink-2: #7A5A6E;   --muted: #B892A5;
+  --accent: #FF6FA5;   --accent-2: #FFB070; --accent-soft: rgba(255,111,165,0.15);
+  --mint: #6DCBB4;     --rose: #FF6FA5;     --sky: #7EC4E8;
+  --border: rgba(120,50,90,0.12);  --border-strong: rgba(120,50,90,0.22);
+  --shadow-sm: 0 2px 6px rgba(200,120,150,0.10);
+  --shadow-md: 0 14px 32px rgba(200,120,150,0.18);
+  --shadow-lg: 0 28px 60px rgba(200,120,150,0.22);
+  --hero-grad: radial-gradient(120% 100% at 0% 0%, #FFC9DC 0%, transparent 55%),
+               radial-gradient(120% 100% at 100% 100%, #C7E1FF 0%, transparent 60%),
+               linear-gradient(135deg, #FFE4EE, #E8F2FF);
+  --tile-mastered: linear-gradient(140deg, #FFD4E2, #FFC4D3);
+  --tile-gold: linear-gradient(140deg, #FFE2A8, #FFB96E);
+  --tile-platinum: linear-gradient(140deg, #F1D7F2, #CDE0FF);
+  --petal: #FF6FA5;
+  --gradient-brand: linear-gradient(135deg, #FF6FA5, #FFB070);
+  --ring-track: rgba(120,50,90,0.10);
+  --bg-alt: var(--surface);
+  --bg-elevated: var(--surface-2);
+  --fg: var(--ink);
+  --fg-dim: var(--muted);
+  --indigo: var(--accent-2);
+  --indigo-soft: rgba(255,176,112,0.18);
+  --ok: var(--mint);
+  --err: var(--rose);
+  --border-soft: var(--border);
+  color-scheme: light;
+}
+
+/* ── Base reset + body ─────────────────────────────────────────────── */
+:root {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-feature-settings: 'kern' 1;
 }
 
 * {
   box-sizing: border-box;
-  /* This is a practice app, not a reading app — disable text selection
-     everywhere to prevent iOS from triggering selection handles when
-     the user holds a stroke or long-presses any UI element. */
+  /* Practice app, not a reading app — disable text selection everywhere to
+     prevent iOS from triggering selection handles when the user holds a
+     stroke or long-presses any UI element. */
   -webkit-user-select: none;
   user-select: none;
 }
@@ -33,16 +121,11 @@ html, body, #app {
   margin: 0;
   padding: 0;
   min-height: 100%;
-  background:
-    radial-gradient(ellipse at top, rgba(124, 92, 255, 0.08), transparent 50%),
-    radial-gradient(ellipse at bottom, rgba(255, 122, 89, 0.06), transparent 50%),
-    var(--bg);
-  background-attachment: fixed;
-  color: var(--fg);
+  background: var(--bg);
+  color: var(--ink);
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
   overscroll-behavior: none;
-  font-feature-settings: 'kern' 1;
 }
 
 body {
@@ -52,12 +135,18 @@ body {
   padding-right: env(safe-area-inset-right);
 }
 
+/* ── Typography helpers ───────────────────────────────────────────── */
+.jp-serif { font-family: 'Shippori Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', serif; }
+.jp-sans  { font-family: 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', sans-serif; }
+.tnum     { font-variant-numeric: tabular-nums; }
+
+/* ── Buttons ──────────────────────────────────────────────────────── */
 button {
   font: inherit;
   color: inherit;
-  background: var(--bg-alt);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 0.65em 1.1em;
   cursor: pointer;
   touch-action: manipulation;
@@ -65,34 +154,71 @@ button {
 }
 button:active:not(:disabled) {
   transform: scale(0.97);
-  background: var(--bg-elevated);
+  background: var(--surface-2);
 }
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 button.primary {
-  background: linear-gradient(135deg, var(--accent), #ff5a30);
+  background: var(--gradient-brand);
   border-color: transparent;
-  color: #1b1b1f;
-  font-weight: 600;
-  box-shadow: 0 6px 20px rgba(255, 122, 89, 0.35);
-}
-button.primary:active:not(:disabled) {
-  background: linear-gradient(135deg, #ff8a6d, #ff6a40);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: var(--shadow-md);
 }
 
 a { color: var(--accent); text-decoration: none; }
 
-.kanji-big { font-size: clamp(4rem, 20vw, 12rem); line-height: 1; font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif; }
+.kanji-big {
+  font-size: clamp(4rem, 20vw, 12rem);
+  line-height: 1;
+  font-family: 'Shippori Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+}
 
-/* Smooth view transitions between routes */
+/* ── Motion ───────────────────────────────────────────────────────── */
 @view-transition { navigation: auto; }
 
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.fade-in {
-  animation: fadeInUp 0.25s ease-out;
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+
+@keyframes float-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 40%, transparent); }
+  50%      { box-shadow: 0 0 0 10px color-mix(in oklab, var(--accent) 0%, transparent); }
+}
+
+@keyframes confetti-fall {
+  to { transform: translateY(120vh) rotate(720deg); opacity: 0; }
+}
+
+@keyframes petal-drift {
+  0%   { transform: translate(0, -10%) rotate(0deg); }
+  100% { transform: translate(40px, 110%) rotate(360deg); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in   { animation: fadeInUp 0.25s ease-out; }
+  .animate-breathe   { animation: breathe 2.5s ease-in-out infinite; }
+  .animate-float-up  { animation: float-up 0.4s ease-out both; }
+  .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+  .animate-petal-drift { animation: petal-drift linear infinite; }
+  .animate-shimmer   { animation: shimmer 3s linear infinite; }
+  .animate-confetti-fall { animation: confetti-fall 3s linear infinite; }
 }

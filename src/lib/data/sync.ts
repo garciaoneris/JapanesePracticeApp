@@ -10,8 +10,11 @@ const GIST_FILENAME = 'jp-practice-sync.json';
 
 // ── Sync payload schema ──────────────────────────────────────────────────
 
+/** Payload version. Bumped to 2 when gamification fields landed; v1 payloads
+ *  still pull fine because every v2 field is optional and falsy defaults are
+ *  safe (e.g. xp defaults to 0). */
 export interface SyncPayload {
-  v: 1;
+  v: 1 | 2;
   ts: number;
   scores: Record<string, number>;
   srs: SrsState[];
@@ -46,6 +49,29 @@ export interface SyncPayload {
   mistakesCleared?: ClearedMistake[];
   /** Cleared-mistake tombstones, native mode. */
   nativeMistakesCleared?: ClearedMistake[];
+
+  // ── Gamification (v2+) — all optional so v1 payloads still parse ────
+  /** User-selected theme. Last-writer-wins by `ts`. */
+  theme?: 'washi' | 'neon' | 'sakura';
+  /** Display name shown in the Home greeting. Last-writer-wins by `ts`. */
+  displayName?: string;
+  /** Daily-goal preference in minutes. Last-writer-wins by `ts`. */
+  dailyGoalMinutes?: number;
+  /** Cumulative XP. Max wins. */
+  xp?: number;
+  /** Cached level (derived from xp, but cheap to store). Max wins. */
+  level?: number;
+  /** Current consecutive-day streak. Max wins. */
+  streakDays?: number;
+  /** ISO yyyy-mm-dd of the last goal-hit day. Max wins. */
+  lastActiveDate?: string;
+  /** Minutes studied today. Max wins, but ONLY when `todayDate` matches
+   *  locally — otherwise remote is a stale yesterday count and ignored. */
+  todayMinutes?: number;
+  /** ISO yyyy-mm-dd the `todayMinutes` counter belongs to. Max wins. */
+  todayDate?: string;
+  /** Earned badge ids. Union merge. */
+  badges?: string[];
 }
 
 // ── Token management ─────────────────────────────────────────────────────
@@ -114,7 +140,7 @@ export async function findOrCreateGist(token: string): Promise<string> {
   }
 
   // None found -- create a new private gist with empty initial data.
-  const emptyPayload: SyncPayload = { v: 1, ts: 0, scores: {}, srs: [], attempts: [] };
+  const emptyPayload: SyncPayload = { v: 2, ts: 0, scores: {}, srs: [], attempts: [] };
   const createRes = await ghFetch(token, '/gists', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -192,14 +218,30 @@ export async function collectLocal(): Promise<SyncPayload> {
   const mistakesCleared = (await getMeta<ClearedMistake[]>('mistakes-cleared')) ?? [];
   const nativeMistakesCleared = (await getMeta<ClearedMistake[]>('native-mistakes-cleared')) ?? [];
 
+  // ── Gamification ──────────────────────────────────────────────────
+  const theme = await getMeta<'washi' | 'neon' | 'sakura'>('theme');
+  const displayName = await getMeta<string>('displayName');
+  const dailyGoalMinutes = await getMeta<number>('dailyGoalMinutes');
+  const xp = await getMeta<number>('xp');
+  const level = await getMeta<number>('level');
+  const streakDays = await getMeta<number>('streakDays');
+  const lastActiveDate = await getMeta<string>('lastActiveDate');
+  const todayMinutes = await getMeta<number>('todayMinutes');
+  const todayDate = await getMeta<string>('todayDate');
+  const badges = await getMeta<string[]>('badges');
+
   return {
-    v: 1, ts: Date.now(), scores, srs, attempts,
+    v: 2, ts: Date.now(), scores, srs, attempts,
     quizScores, reviewScores, nativeQuizScores, nativeReviewScores, nativeMode,
     furiganaMode,
     mistakes, nativeMistakes,
     mistakesCleared, nativeMistakesCleared,
     reviewDrawScores, nativeReviewDrawScores,
     fillKanjiScores, nativeFillKanjiScores,
+    theme, displayName, dailyGoalMinutes,
+    xp, level, streakDays, lastActiveDate,
+    todayMinutes, todayDate,
+    badges,
   };
 }
 
@@ -226,7 +268,7 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
   if (!file?.content) return false;
 
   const remote: SyncPayload = JSON.parse(file.content);
-  if (remote.v !== 1) return false;
+  if (remote.v !== 1 && remote.v !== 2) return false;
 
   const d = await db();
   let modified = false;
@@ -404,6 +446,100 @@ export async function pullFromGist(token: string, gistId: string): Promise<boole
     if (remote.furiganaMode !== localFuri) {
       await putMeta('furigana-mode', remote.furiganaMode);
       setFuriganaModeCache(remote.furiganaMode);
+      modified = true;
+    }
+  }
+
+  // ── Gamification merges (v2+) ────────────────────────────────────────
+  // Preference-style keys (theme, displayName, dailyGoalMinutes) are
+  // last-writer-wins by payload `ts`. Counters (xp, streak) are max-wins.
+  // todayMinutes is max-wins but guarded by a matching `todayDate` —
+  // otherwise we'd pull in a stale yesterday count.
+
+  // Last-writer-wins preferences: remote is considered newer when its
+  // `ts` beats our own last-sync timestamp. We don't have a per-field
+  // `ts`, so this is approximate — good enough for single-user devices.
+  const localSyncTs = (await getMeta<number>('last-sync')) ?? 0;
+  const remoteWins = remote.ts > localSyncTs;
+
+  if (remoteWins && remote.theme && ['washi', 'neon', 'sakura'].includes(remote.theme)) {
+    const localTheme = await getMeta<string>('theme');
+    if (remote.theme !== localTheme) {
+      await putMeta('theme', remote.theme);
+      // Apply immediately so the UI catches up without a reload.
+      if (typeof document !== 'undefined') {
+        document.documentElement.setAttribute('data-theme', remote.theme);
+      }
+      modified = true;
+    }
+  }
+  if (remoteWins && typeof remote.displayName === 'string') {
+    const localName = (await getMeta<string>('displayName')) ?? '';
+    if (remote.displayName !== localName) {
+      await putMeta('displayName', remote.displayName);
+      modified = true;
+    }
+  }
+  if (remoteWins && typeof remote.dailyGoalMinutes === 'number') {
+    const localGoal = await getMeta<number>('dailyGoalMinutes');
+    if (remote.dailyGoalMinutes !== localGoal) {
+      await putMeta('dailyGoalMinutes', remote.dailyGoalMinutes);
+      modified = true;
+    }
+  }
+
+  // Max-wins counters
+  if (typeof remote.xp === 'number') {
+    const localXp = (await getMeta<number>('xp')) ?? 0;
+    if (remote.xp > localXp) { await putMeta('xp', remote.xp); modified = true; }
+  }
+  if (typeof remote.level === 'number') {
+    const localLvl = (await getMeta<number>('level')) ?? 0;
+    if (remote.level > localLvl) { await putMeta('level', remote.level); modified = true; }
+  }
+  if (typeof remote.streakDays === 'number') {
+    const localStreak = (await getMeta<number>('streakDays')) ?? 0;
+    if (remote.streakDays > localStreak) { await putMeta('streakDays', remote.streakDays); modified = true; }
+  }
+  if (typeof remote.lastActiveDate === 'string') {
+    const localLast = (await getMeta<string>('lastActiveDate')) ?? '';
+    if (remote.lastActiveDate > localLast) {
+      await putMeta('lastActiveDate', remote.lastActiveDate);
+      modified = true;
+    }
+  }
+
+  // todayMinutes: only trust remote when dates match. Otherwise remote is
+  // from a different day and should not influence today's counter.
+  if (typeof remote.todayDate === 'string') {
+    const localTodayDate = (await getMeta<string>('todayDate')) ?? '';
+    if (remote.todayDate > localTodayDate) {
+      await putMeta('todayDate', remote.todayDate);
+      // Bump to whatever remote had on that newer day.
+      await putMeta('todayMinutes', remote.todayMinutes ?? 0);
+      modified = true;
+    } else if (remote.todayDate === localTodayDate && typeof remote.todayMinutes === 'number') {
+      const localMins = (await getMeta<number>('todayMinutes')) ?? 0;
+      if (remote.todayMinutes > localMins) {
+        await putMeta('todayMinutes', remote.todayMinutes);
+        modified = true;
+      }
+    }
+  }
+
+  // Badges: union merge
+  if (Array.isArray(remote.badges) && remote.badges.length > 0) {
+    const localBadges = (await getMeta<string[]>('badges')) ?? [];
+    const set = new Set(localBadges);
+    let badgesModified = false;
+    for (const b of remote.badges) {
+      if (typeof b === 'string' && !set.has(b)) {
+        set.add(b);
+        badgesModified = true;
+      }
+    }
+    if (badgesModified) {
+      await putMeta('badges', [...set]);
       modified = true;
     }
   }

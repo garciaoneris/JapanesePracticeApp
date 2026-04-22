@@ -1,13 +1,18 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { link } from 'svelte-spa-router';
   import PracticeMorph from '../lib/ui/PracticeMorph.svelte';
   import RevealKanji from '../lib/ui/RevealKanji.svelte';
   import Furigana from '../lib/ui/Furigana.svelte';
+  import Petal from '../lib/ui/Petal.svelte';
+  import Blossom from '../lib/ui/Blossom.svelte';
+  import PetalField from '../lib/ui/PetalField.svelte';
   import { bundle } from '../lib/data/bundle';
   import { speakJa, ttsSupported } from '../lib/speech/tts';
   import { filterExamples, loadKnownKanji } from '../lib/data/known';
   import { exampleJp, type Example } from '../lib/data/types';
+  import { getBestScore } from '../lib/data/db';
+  import { startTick, stopTick } from '../lib/gamification/goal';
 
   interface Params {
     char: string;
@@ -18,16 +23,28 @@
   const kanji = $derived(bundle().kanji[char]);
   const words = $derived(kanji ? kanji.words.map((id) => bundle().words[id]).filter(Boolean) : []);
 
-  // Set of kanji the learner has mastered (best score >= 80). Loaded on
-  // mount; the filtered-examples $derived picks it up reactively.
+  /** JLPT (5..0) → curriculum level (1..5). Same mapping as Home / Review. */
+  const LEVEL_OF: Record<number, number> = { 5: 1, 4: 2, 3: 3, 2: 3, 1: 4, 0: 5 };
+  const level = $derived(kanji ? LEVEL_OF[kanji.jlpt] ?? 5 : 5);
+
+  // Known-kanji set (for Furigana gating in examples).
   let knownKanji = $state<Set<string>>(new Set());
+  let bestScore = $state<number | undefined>(undefined);
+
   onMount(async () => {
     knownKanji = await loadKnownKanji();
+    startTick();
+  });
+  onDestroy(() => stopTick());
+
+  // Best score lookup updates whenever the char changes.
+  $effect(() => {
+    const c = char;
+    getBestScore(c).then((s) => {
+      bestScore = s;
+    });
   });
 
-  // Pull up to 8 unique example sentences from the kanji's vocab, then filter
-  // them through the known-kanji gate (treating the current kanji as known).
-  // If the gate removes everything, the fallback pair surfaces with a hint.
   const examplesRaw = $derived.by<Example[]>(() => {
     const out: Example[] = [];
     const seen = new Set<string>();
@@ -42,13 +59,9 @@
     }
     return out;
   });
-
   const filteredExamples = $derived(filterExamples(examplesRaw, knownKanji, char));
   const examples = $derived(filteredExamples.kept.slice(0, 4));
   const tooAdvanced = $derived(filteredExamples.tooAdvanced);
-
-  // Callouts for the morph step come pre-computed from the bundle pipeline --
-  // each kanji carries up to 4 {word, reading, sentence} triples.
   const callouts = $derived(kanji?.callouts ?? []);
 
   const STEPS = [
@@ -58,106 +71,138 @@
   type Step = 0 | 1;
   let step = $state<Step>(0);
 
-  // Reset progression whenever the kanji changes.
   $effect(() => {
     void char;
     step = 0;
   });
 
-  function next() {
-    if (step < 1) step = (step + 1) as Step;
-  }
-  function prev() {
-    if (step > 0) step = (step - 1) as Step;
-  }
-
-  function speakReadings() {
-    if (!kanji) return;
-    const r = kanji.kun[0] ?? kanji.on[0] ?? kanji.char;
-    speakJa(r);
-  }
-
   /** Bound to PracticeMorph — true while the reference animation is visible,
    *  false once the user starts drawing. Controls whether the hero shows the
    *  plain glyph (visible) or the RevealKanji peek mode (hidden). */
   let showingRef = $state(true);
+
+  /** Deduplicated reading list for the TTS chips. Combines kun (unchanged,
+   *  okurigana preserved visually) and on (shown as katakana as stored). */
+  const readingChips = $derived.by<string[]>(() => {
+    if (!kanji) return [];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const r of kanji.kun) {
+      if (r && !seen.has(r)) { seen.add(r); out.push(r); }
+    }
+    for (const r of kanji.on) {
+      if (r && !seen.has(r)) { seen.add(r); out.push(r); }
+    }
+    return out.slice(0, 6);
+  });
+
+  const meaningLine = $derived(
+    kanji ? kanji.meanings.slice(0, 3).join(' · ') : '',
+  );
+
+  // Encouraging microcopy — current-best-score driven. Stateless per-session
+  // so the learner gets the same vibe each time they open the same kanji.
+  const encourageLine = $derived.by(() => {
+    if (bestScore === undefined) return 'Fresh start. Ready when you are.';
+    if (bestScore >= 85) return "Almost there — make it effortless.";
+    if (bestScore >= 70) return "You're in range. Stay with each stroke.";
+    if (bestScore >= 40) return "Coming along. Keep the rhythm.";
+    return "Take your time — every stroke teaches your hand.";
+  });
+
+  /** Strip okurigana markers for TTS, keep visual. */
+  function cleanForSpeech(r: string): string {
+    return r.replace(/[.\-]/g, '').trim();
+  }
 </script>
 
-<a class="back" href="/" use:link>← Back</a>
-
-{#if !kanji}
-  <div class="center">Unknown kanji: {char}</div>
-{:else}
-  <header class="head">
-    <div class="kanji-hero">
-      {#if showingRef || step === 1}
-        <span class="kanji-glyph">{kanji.char}</span>
-      {:else}
-        {#key char}
-          <RevealKanji svg={kanji.svg} strokeCount={kanji.strokes} />
-        {/key}
-      {/if}
-      <div class="hero-meta">
-        <div class="badges">
-          <span class="badge n">Lvl {({5:1, 4:2, 3:3, 2:3, 1:4, 0:5} as Record<number,number>)[kanji.jlpt] ?? '?'}</span>
-          <span class="badge">{kanji.strokes} strokes</span>
-        </div>
-        <p class="meaning">{kanji.meanings.slice(0, 3).join(' · ')}</p>
+<div class="screen">
+  {#if !kanji}
+    <div class="center">Unknown kanji: {char}</div>
+  {:else}
+    <!-- ── Back + pills ──────────────────────────────────────── -->
+    <header class="topbar">
+      <a class="back" href="/" use:link>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+        Back
+      </a>
+      <div class="pills">
+        <span class="pill pill-accent"><Petal size={10} /> L{level}</span>
+        <span class="pill pill-muted">{kanji.strokes} strokes</span>
       </div>
-    </div>
-  </header>
+    </header>
 
-  <nav class="stepper" aria-label="Lesson steps">
-    {#each STEPS as s, i}
-      <button
-        class="step"
-        class:active={step === i}
-        class:done={step > i}
-        onclick={() => (step = i as Step)}
-      >
-        <span class="num">{i + 1}</span>
-        <span class="lbl">{s.label}</span>
-      </button>
-    {/each}
-  </nav>
+    <!-- ── Hero kanji card ───────────────────────────────────── -->
+    <section class="hero">
+      <PetalField count={8} />
 
-  <section class="panel">
+      <div class="hero-row">
+        <div class="glyph-tile">
+          {#if showingRef || step === 1}
+            <div class="glyph jp-serif">{kanji.char}</div>
+          {:else}
+            {#key char}
+              <RevealKanji svg={kanji.svg} strokeCount={kanji.strokes} />
+            {/key}
+          {/if}
+          <div class="stroke-count tnum">1 / {kanji.strokes}</div>
+        </div>
+
+        <div class="hero-body">
+          <div class="kicker">Learn</div>
+          <div class="meaning">{meaningLine}</div>
+          {#if readingChips.length > 0}
+            <div class="reading-chips">
+              {#each readingChips as r (r)}
+                <button
+                  class="r-chip jp-sans"
+                  onclick={() => speakJa(cleanForSpeech(r))}
+                  disabled={!ttsSupported()}
+                >
+                  <svg class="r-play" width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+                  {r}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <div class="encourage">
+        <span class="encourage-icon" aria-hidden="true"><Blossom size={18} /></span>
+        <span>{encourageLine}</span>
+      </div>
+    </section>
+
+    <!-- ── Stepper ──────────────────────────────────────────── -->
+    <nav class="stepper" aria-label="Lesson steps">
+      {#each STEPS as s, i}
+        <button
+          class="step"
+          class:active={step === i}
+          onclick={() => (step = i as Step)}
+        >
+          <span class="step-num">{i + 1}</span>
+          <span>{s.label}</span>
+        </button>
+      {/each}
+    </nav>
+
+    <!-- ── Practice / Examples body ─────────────────────────── -->
     {#if step === 0}
-      <!-- Step 0: Practice — single canvas with animation + drawing -->
-      <div class="practice-step">
+      <section class="practice-card">
+        <div class="practice-head">
+          <div class="practice-title">Draw the kanji</div>
+        </div>
         {#key char + 'morph'}
           <PracticeMorph {kanji} {callouts} {knownKanji} onRefChange={(v) => (showingRef = v)} />
         {/key}
-
-        <div class="readings-grid">
-          <div class="reading-block">
-            <div class="reading-label">On'yomi</div>
-            <div class="reading-vals">
-              {#each kanji.on as r}
-                <button class="chip" onclick={() => speakJa(r)} disabled={!ttsSupported()}>
-                  <span>{r}</span> <span class="speaker">&#x1f50a;</span>
-                </button>
-              {/each}
-              {#if !kanji.on.length}<span class="muted">--</span>{/if}
-            </div>
-          </div>
-          <div class="reading-block">
-            <div class="reading-label">Kun'yomi</div>
-            <div class="reading-vals">
-              {#each kanji.kun as r}
-                <button class="chip" onclick={() => speakJa(r)} disabled={!ttsSupported()}>
-                  <span>{r}</span> <span class="speaker">&#x1f50a;</span>
-                </button>
-              {/each}
-              {#if !kanji.kun.length}<span class="muted">--</span>{/if}
-            </div>
-          </div>
-        </div>
-      </div>
+      </section>
     {:else}
-      <!-- Step 1: Examples with furigana + TTS -->
-      <div class="examples">
-        <h2>See it in context</h2>
+      <section class="examples-card">
+        <div class="card-kicker">Examples · tap to play</div>
         {#if tooAdvanced && examples.length > 0}
           <p class="advanced-hint">
             These sentences include kanji you haven't mastered yet. Keep practicing and they'll clear up.
@@ -166,380 +211,409 @@
         {#if examples.length === 0}
           <p class="muted">No example sentences for this kanji yet.</p>
         {:else}
-          <ul>
-            {#each examples as ex (exampleJp(ex))}
-              <li class="example-card">
+          <ul class="examples-list">
+            {#each examples as ex, i (exampleJp(ex))}
+              <li class="example" class:dashed={i < examples.length - 1}>
                 <div class="ex-row">
                   <div
                     class="ex-jp"
-                    onclick={() => speakJa(exampleJp(ex))}
-                    onkeydown={(e) => e.key === 'Enter' && speakJa(exampleJp(ex))}
                     role="button"
                     tabindex="0"
-                    aria-label="Tap empty space to hear the whole sentence"
+                    aria-label="Tap to hear the sentence"
+                    onclick={() => speakJa(exampleJp(ex))}
+                    onkeydown={(e) => e.key === 'Enter' && speakJa(exampleJp(ex))}
                   >
                     <Furigana segments={ex.segs} knownKanji={knownKanji} currentKanji={char} />
                   </div>
                   <button
-                    class="speak-btn"
+                    class="ex-speak"
                     onclick={(e) => { e.stopPropagation(); speakJa(exampleJp(ex)); }}
-                    aria-label="Speak whole sentence"
-                  >&#x1f50a;</button>
+                    aria-label="Speak sentence"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                  </button>
                 </div>
                 <div class="ex-en">{ex.en}</div>
               </li>
             {/each}
           </ul>
         {/if}
-      </div>
+      </section>
     {/if}
-  </section>
 
-  <div class="nav-row">
-    <button onclick={prev} disabled={step === 0}>← Back</button>
-    <a class="btn home-btn" href="/" use:link>&#x1f3e0; Home</a>
-    {#if step === 0}
-      <button class="primary" onclick={next}>Next →</button>
-    {:else if words.length}
-      <a class="btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
+    {#if step === 1 && words.length > 1}
+      <section class="words-card">
+        <div class="card-kicker">Words using {kanji.char}</div>
+        <div class="word-grid">
+          {#each words.slice(0, 12) as w (w.id)}
+            <a
+              class="word-card"
+              href={`/vocab/${encodeURIComponent(w.id)}`}
+              use:link
+              onclick={() => sessionStorage.setItem('vocab-from-learn', char)}
+            >
+              <div class="w-jp jp-serif">{w.jp}</div>
+              <div class="w-reading jp-sans">{w.reading}</div>
+              <div class="w-en">{w.meanings[0] ?? ''}</div>
+            </a>
+          {/each}
+        </div>
+      </section>
     {/if}
-  </div>
 
-  {#if step === 1 && words.length > 1}
-    <section class="words-section">
-      <h3>Words using {kanji.char}</h3>
-      <div class="word-grid">
-        {#each words.slice(0, 12) as w (w.id)}
-          <a class="word-card" href={`/vocab/${encodeURIComponent(w.id)}`} use:link
-             onclick={() => sessionStorage.setItem('vocab-from-learn', char)}>
-            <div class="w-jp">{w.jp}</div>
-            <div class="w-reading">{w.reading}</div>
-            <div class="w-en">{w.meanings[0] ?? ''}</div>
-          </a>
-        {/each}
-      </div>
-    </section>
+    <!-- ── Footer nav ───────────────────────────────────────── -->
+    <div class="foot">
+      <button
+        class="foot-btn ghost"
+        onclick={() => (step = Math.max(0, step - 1) as Step)}
+        disabled={step === 0}
+      >← Back</button>
+      <a class="foot-btn" href="/" use:link>Home</a>
+      {#if step === 0}
+        <button class="foot-btn primary" onclick={() => (step = 1)}>Next →</button>
+      {:else if words.length}
+        <a class="foot-btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
+      {:else}
+        <a class="foot-btn primary" href="/" use:link>Done</a>
+      {/if}
+    </div>
   {/if}
-{/if}
+</div>
 
 <style>
-  .back {
-    display: inline-block;
-    padding: 0.75rem 1rem;
-    color: var(--fg-dim);
-    font-size: 0.9rem;
+  .screen {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 16px 16px 40px;
   }
-  .center {
-    padding: 2rem;
-    text-align: center;
-    color: var(--fg-dim);
-  }
+  .center { padding: 2rem; text-align: center; color: var(--muted); }
 
-  .head {
-    padding: 0.5rem 1rem 1rem;
-  }
-  .kanji-hero {
+  /* ── Topbar ─────────────────────────────────────────────── */
+  .topbar {
     display: flex;
     align-items: center;
-    gap: 1.25rem;
-    background: linear-gradient(135deg, rgba(255, 122, 89, 0.18), rgba(255, 122, 89, 0.04));
-    padding: 1.25rem 1.5rem;
-    border-radius: 20px;
-    border: 1px solid rgba(255, 122, 89, 0.25);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
-    /* Fixed height prevents layout shift when toggling glyph ↔ RevealKanji */
-    min-height: 6.5rem;
+    justify-content: space-between;
+    margin-bottom: 12px;
   }
-  .kanji-glyph {
-    font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
-    /* Match RevealKanji's exact dimensions so no layout shift on step change */
-    width: clamp(5rem, 18vw, 8rem);
-    height: clamp(5rem, 18vw, 8rem);
+  .back {
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: 13px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pills { display: flex; gap: 6px; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .pill-accent { background: var(--accent-soft); color: var(--accent); }
+  .pill-muted { background: var(--surface-2); color: var(--ink-2); }
+
+  /* ── Hero kanji card ────────────────────────────────────── */
+  .hero {
+    position: relative;
+    border-radius: 26px;
+    background: var(--hero-grad);
+    padding: 22px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+  }
+  .hero-row {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+  .glyph-tile {
+    width: 180px;
+    height: 180px;
+    background: var(--surface);
+    border-radius: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0;
-    font-size: clamp(3rem, 12vw, 5rem);
-    line-height: 1;
-    color: var(--fg);
-    text-shadow: 0 4px 24px rgba(255, 122, 89, 0.35);
-  }
-  .hero-meta {
-    flex: 1;
-    min-width: 0;
-  }
-  .badges {
-    display: flex;
-    gap: 0.4rem;
-    margin-bottom: 0.4rem;
-  }
-  .badge {
-    background: rgba(0, 0, 0, 0.3);
     border: 1px solid var(--border);
-    padding: 0.2rem 0.65rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    color: var(--fg-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.4),
+      var(--shadow-sm);
+    flex-shrink: 0;
+    position: relative;
   }
-  .badge.n {
-    background: var(--accent);
-    color: #1b1b1f;
-    border-color: var(--accent);
+  .glyph {
+    font-size: 120px;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .stroke-count {
+    position: absolute;
+    bottom: 8px;
+    right: 10px;
+    font-size: 10px;
     font-weight: 700;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .hero-body { flex: 1; min-width: 0; }
+  .kicker {
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
   }
   .meaning {
-    margin: 0.2rem 0 0;
-    color: var(--fg);
-    font-size: 1.05rem;
-    font-weight: 500;
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1.2;
+    color: var(--ink);
+    margin-bottom: 10px;
   }
-
-  .stepper {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.4rem;
-    padding: 0.5rem 1rem 0;
-  }
-  .step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0.6rem 0.4rem;
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    color: var(--fg-dim);
-    font-size: 0.75rem;
-    transition: all 0.2s;
-  }
-  .step .num {
-    width: 1.6rem;
-    height: 1.6rem;
-    border-radius: 50%;
-    background: var(--border);
-    display: grid;
-    place-items: center;
-    font-weight: 700;
-    color: var(--fg);
-    font-size: 0.85rem;
-  }
-  .step.active {
-    border-color: var(--accent);
-    background: rgba(255, 122, 89, 0.12);
-    color: var(--fg);
-  }
-  .step.active .num {
-    background: var(--accent);
-    color: #1b1b1f;
-  }
-  .step.done .num {
-    background: var(--ok);
-    color: #1b1b1f;
-  }
-  .step.done {
-    color: var(--fg);
-  }
-
-  .panel {
-    padding: 1rem;
-    min-height: 22rem;
-  }
-  .panel h2 {
-    text-align: center;
-    margin: 0 0 0.25rem;
-    font-size: 1.2rem;
-    font-weight: 600;
-  }
-
-  .practice-step .readings-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-    margin-top: 1rem;
-  }
-  .reading-block {
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 0.85rem 1rem;
-  }
-  .reading-label {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--fg-dim);
-    margin-bottom: 0.5rem;
-    font-weight: 600;
-  }
-  .reading-vals {
+  .reading-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: 6px;
   }
-  .chip {
+  .r-chip {
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    padding: 0.35rem 0.75rem;
-    border-radius: 999px;
-    background: rgba(255, 122, 89, 0.15);
-    border-color: rgba(255, 122, 89, 0.4);
-    font-size: 1rem;
-    font-family: 'Hiragino Sans', 'Yu Gothic', system-ui;
+    gap: 5px;
   }
-  .chip .speaker {
-    font-size: 0.7rem;
-    opacity: 0.7;
-  }
+  .r-play { color: var(--accent); }
 
-  .nav-row {
+  .encourage {
+    position: relative;
+    z-index: 1;
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    font-size: 13px;
+    color: var(--ink);
     display: flex;
-    gap: 0.5rem;
-    padding: 0 1rem 1rem;
-    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    backdrop-filter: blur(8px);
   }
-  .nav-row button,
-  .nav-row .btn {
+  :global([data-theme='neon']) .encourage {
+    background: rgba(0, 0, 0, 0.35);
+    color: var(--ink);
+  }
+  .encourage-icon { color: var(--accent); display: inline-flex; }
+
+  /* ── Stepper ────────────────────────────────────────────── */
+  .stepper {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .step {
     flex: 1;
-    padding: 0.85rem;
-    font-size: 1rem;
-  }
-  .btn {
-    display: inline-flex;
+    padding: 10px 14px;
+    border-radius: 14px;
+    background: var(--surface);
+    color: var(--ink-2);
+    border: 1px solid var(--border);
+    display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: var(--bg-alt);
-    color: var(--fg);
-    text-decoration: none;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 13px;
   }
-  .btn.primary {
+  .step.active {
+    background: var(--ink);
+    color: var(--surface);
+    border-color: var(--ink);
+  }
+  .step-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 800;
+  }
+  .step.active .step-num {
     background: var(--accent);
-    border-color: var(--accent);
-    color: #1b1b1f;
-    font-weight: 600;
-  }
-  .home-btn {
-    flex: 0.8;
+    color: #fff;
   }
 
-  .advanced-hint {
-    background: rgba(255, 210, 74, 0.1);
-    border: 1px solid rgba(255, 210, 74, 0.3);
-    color: #ffd24a;
-    padding: 0.65rem 0.85rem;
-    border-radius: 10px;
-    font-size: 0.85rem;
-    margin: 0 0 0.85rem;
-    text-align: center;
+  /* ── Practice card ──────────────────────────────────────── */
+  .practice-card {
+    border-radius: 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 18px;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 12px;
   }
-  .examples ul {
+  .practice-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .practice-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--ink);
+  }
+
+  /* ── Examples card ──────────────────────────────────────── */
+  .examples-card,
+  .words-card {
+    border-radius: 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 16px 18px;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 12px;
+  }
+  .card-kicker {
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--muted);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .advanced-hint {
+    background: color-mix(in oklab, var(--accent-2) 18%, var(--surface));
+    border: 1px solid color-mix(in oklab, var(--accent-2) 40%, transparent);
+    color: var(--ink);
+    padding: 10px 12px;
+    border-radius: 12px;
+    font-size: 12.5px;
+    margin: 0 0 10px;
+  }
+  .examples-list {
     list-style: none;
     padding: 0;
     margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.7rem;
   }
-  .example-card {
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1rem;
-    transition: border-color 0.15s;
-  }
-  .example-card:hover {
-    border-color: rgba(255, 122, 89, 0.4);
-  }
+  .example { padding: 10px 0; }
+  .example.dashed { border-bottom: 1px dashed var(--border); }
   .ex-row {
     display: flex;
     align-items: flex-start;
-    gap: 0.5rem;
+    gap: 8px;
   }
   .ex-jp {
     flex: 1;
     min-width: 0;
-    color: var(--fg);
-    font-size: 1.15rem;
+    color: var(--ink);
+    font-size: 17px;
+    line-height: 1.4;
     cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
   }
-  .ex-jp:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
-  .speak-btn {
+  .ex-jp:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 4px;
+  }
+  .ex-speak {
     flex-shrink: 0;
-    padding: 0.35rem 0.6rem;
+    padding: 6px 8px;
     background: transparent;
     border: 1px solid var(--border);
     border-radius: 10px;
-    font-size: 0.95rem;
-    opacity: 0.75;
+    color: var(--ink-2);
+    line-height: 0;
   }
-  .speak-btn:hover { opacity: 1; border-color: var(--accent); }
+  .ex-speak:hover { color: var(--accent); border-color: var(--accent); }
   .ex-en {
-    color: var(--fg-dim);
-    font-size: 0.9rem;
-    margin-top: 0.5rem;
-    line-height: 1.35;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    margin-top: 4px;
+    line-height: 1.4;
   }
 
-  .words-section {
-    padding: 0.5rem 1rem 2.5rem;
-  }
-  .words-section h3 {
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--fg-dim);
-    margin: 0 0 0.75rem;
-    font-weight: 600;
-  }
+  /* ── Words list ─────────────────────────────────────────── */
   .word-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 0.5rem;
+    gap: 8px;
   }
   .word-card {
-    background: var(--bg-alt);
+    background: var(--surface-2);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 0.75rem;
-    color: var(--fg);
+    border-radius: 14px;
+    padding: 10px 12px;
+    color: var(--ink);
+  }
+  .w-jp { font-size: 18px; line-height: 1.2; }
+  .w-reading { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+  .w-en { color: var(--ink-2); font-size: 12px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Footer nav ─────────────────────────────────────────── */
+  .foot {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .foot-btn {
+    flex: 1;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    font-weight: 700;
+    font-size: 14px;
+    text-align: center;
     text-decoration: none;
-    transition: border-color 0.15s, transform 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
-  .word-card:active {
-    transform: scale(0.97);
+  .foot-btn.ghost { color: var(--ink-2); }
+  .foot-btn.primary {
+    background: var(--gradient-brand);
+    color: #fff;
+    /* Keep the 1px border for height-parity with ghost siblings, but clip
+       the gradient to the padding box so anti-aliased border pixels don't
+       bleed a hue fringe against dark backgrounds on Neon. */
+    border-color: transparent;
+    background-clip: padding-box;
+    box-shadow: var(--shadow-sm);
   }
-  .w-jp {
-    font-family: 'Hiragino Mincho ProN', serif;
-    font-size: 1.3rem;
-  }
-  .w-reading {
-    color: var(--fg-dim);
-    font-size: 0.8rem;
-    margin-top: 0.15rem;
-  }
-  .w-en {
-    color: var(--fg);
-    font-size: 0.8rem;
-    margin-top: 0.35rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  :global([data-theme='washi']) .foot-btn.primary { color: #2B231A; }
+  .foot-btn:disabled { opacity: 0.4; }
 
-  .muted { color: var(--fg-dim); }
+  .muted { color: var(--muted); }
 
-  @media (max-width: 380px) {
-    .practice-step .readings-grid {
-      grid-template-columns: 1fr;
-    }
-    .step .lbl {
-      font-size: 0.7rem;
-    }
+  @media (max-width: 520px) {
+    .hero-row { flex-direction: column; align-items: stretch; gap: 12px; }
+    .glyph-tile { width: 100%; height: 170px; }
   }
 </style>
