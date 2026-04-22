@@ -72,7 +72,11 @@
   }
   .tile.tier-platinum {
     background: var(--tile-platinum);
-    color: #3A2D5E;
+    /* --ink goes dark on Washi/Sakura (readable over the pastel lilac
+       gradient) and near-white on Neon (readable over the dark
+       semi-transparent platinum layer). Hardcoding a dark purple here
+       left Neon platinum glyphs almost invisible. */
+    color: var(--ink);
     border: 1.5px solid rgba(120, 100, 200, 0.5);
     box-shadow:
       0 6px 18px rgba(124, 92, 255, 0.3),
@@ -83,10 +87,16 @@
     border: 1.5px solid color-mix(in oklab, var(--rose) 55%, transparent);
   }
   .glyph {
+    /* `position: relative` promotes the glyph into the positioned-siblings
+       paint layer so it lands *on top of* the absolutely-positioned
+       .shimmer-overlay (platinum tier). Without this, the shimmer wash
+       would paint over the character itself. */
+    position: relative;
     line-height: 1;
     font-weight: 500;
   }
   .reading {
+    position: relative;
     font-size: 10px;
     margin-top: 4px;
     opacity: 0.75;
@@ -108,6 +118,9 @@
     color: inherit;
     backdrop-filter: blur(4px);
     line-height: 1.2;
+    /* Explicit z-index keeps the score badge above the shimmer overlay;
+       both are absolutely positioned so DOM order alone isn't enough. */
+    z-index: 1;
   }
   :global([data-theme='neon']) .score {
     background: rgba(0, 0, 0, 0.35);
