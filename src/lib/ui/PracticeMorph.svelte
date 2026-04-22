@@ -218,15 +218,15 @@
     octx.strokeStyle = color;
     octx.stroke(mainPath);
 
-    // Fade the last 10% of the stroke to transparent. Linear gradient
-    // along first→last point with alpha 0 through t=0.9, ramping to
+    // Fade the last 30% of the stroke to transparent. Linear gradient
+    // along first→last point with alpha 0 through t=0.7, ramping to
     // alpha 1 at t=1, painted in destination-out so only the tail is
     // progressively erased.
     const first = pxPts[0];
     const last = pxPts[pxPts.length - 1];
     const fade = octx.createLinearGradient(first.x, first.y, last.x, last.y);
     fade.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    fade.addColorStop(0.9, 'rgba(0, 0, 0, 0)');
+    fade.addColorStop(0.7, 'rgba(0, 0, 0, 0)');
     fade.addColorStop(1, 'rgba(0, 0, 0, 1)');
     octx.globalCompositeOperation = 'destination-out';
     octx.strokeStyle = fade;
