@@ -261,22 +261,8 @@
       </section>
     {/if}
 
-    <!-- ── Footer nav ───────────────────────────────────────── -->
-    <div class="foot">
-      <button
-        class="foot-btn ghost"
-        onclick={() => (step = Math.max(0, step - 1) as Step)}
-        disabled={step === 0}
-      >← Back</button>
-      <a class="foot-btn" href="/" use:link>Home</a>
-      {#if step === 0}
-        <button class="foot-btn primary" onclick={() => (step = 1)}>Next →</button>
-      {:else if words.length}
-        <a class="foot-btn primary" href={`/vocab/${encodeURIComponent(words[0].id)}`} use:link>Vocab →</a>
-      {:else}
-        <a class="foot-btn primary" href="/" use:link>Done</a>
-      {/if}
-    </div>
+    <!-- Foot nav removed — the TabBar handles Home, and the stepper
+         chips above handle Practice ↔ Examples switching. -->
   {/if}
 </div>
 
@@ -574,41 +560,6 @@
   .w-jp { font-size: 18px; line-height: 1.2; }
   .w-reading { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
   .w-en { color: var(--ink-2); font-size: 12px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  /* ── Footer nav ─────────────────────────────────────────── */
-  .foot {
-    display: flex;
-    gap: 8px;
-    margin-top: 16px;
-  }
-  .foot-btn {
-    flex: 1;
-    padding: 12px;
-    border-radius: 14px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--ink);
-    font-weight: 700;
-    font-size: 14px;
-    text-align: center;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .foot-btn.ghost { color: var(--ink-2); }
-  .foot-btn.primary {
-    background: var(--gradient-brand);
-    color: #fff;
-    /* Keep the 1px border for height-parity with ghost siblings, but clip
-       the gradient to the padding box so anti-aliased border pixels don't
-       bleed a hue fringe against dark backgrounds on Neon. */
-    border-color: transparent;
-    background-clip: padding-box;
-    box-shadow: var(--shadow-sm);
-  }
-  :global([data-theme='washi']) .foot-btn.primary { color: #2B231A; }
-  .foot-btn:disabled { opacity: 0.4; }
 
   .muted { color: var(--muted); }
 

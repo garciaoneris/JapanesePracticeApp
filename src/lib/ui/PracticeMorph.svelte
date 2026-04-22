@@ -159,81 +159,23 @@
     return REF_STROKE_VB * (canvas?.width ?? VB) / VB;
   }
 
-  /** Constant-width stroke in canvas pixels — 1.1× the reference so the
-   *  user's drawing sits confidently on top of the guide. */
-  function userStrokeWidthPx(): number {
-    return refStrokePx() * 1.1;
-  }
-
   // ── Stroke rendering ────────────────────────────────────────────────
-  // Plain solid stroke with a subtle paper drop shadow. Input polyline
-  // is pre-smoothed via two Chaikin passes so noisy/jagged pointer
-  // input comes out as a clean curve — at the final quadratic-midpoint
-  // draw the stroke reads as one continuous line.
-
-  /** One pass of Chaikin's corner-cutting algorithm: for each adjacent
-   *  pair (a, b), replace with two new points at 1/4 and 3/4 of the
-   *  line between them. Endpoints preserved. Iterating this 2-3 times
-   *  rounds off any sharp direction changes in a noisy polyline while
-   *  staying faithful to the overall shape. */
-  function chaikinPass(pts: Point[]): Point[] {
-    if (pts.length < 3) return pts.slice();
-    const out: Point[] = [pts[0]];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i];
-      const b = pts[i + 1];
-      out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
-      out.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
-    }
-    out.push(pts[pts.length - 1]);
-    return out;
-  }
-
-  function smoothInput(pts: Point[]): Point[] {
-    // Two passes = ~4× point density with corner cuts; enough to
-    // flatten the kind of jitter that comes from unsteady fingers or
-    // an iPad trackpad without rounding off intentional direction
-    // changes in the stroke.
-    return chaikinPass(chaikinPass(pts));
-  }
-
+  // Default plain polyline. No Chaikin smoothing, no quadratic
+  // midpoint curves, no drop shadow. Just what KanjiCanvas did upstream.
   function drawStroke(pts: Point[], color: string) {
     if (!ctx || pts.length < 2) return;
     const sx = canvas.width / VB;
     const sy = canvas.height / VB;
-
-    // Pre-smooth the noisy polyline, THEN apply quadratic midpoint
-    // curves for the final render — two layers of smoothing stack
-    // cleanly.
-    const sm = smoothInput(pts);
-
-    ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth = userStrokeWidthPx();
+    ctx.lineWidth = Math.max(4, canvas.width / 26);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    // Subtle paper drop shadow.
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
-    ctx.shadowBlur = 3;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 2;
-
     ctx.beginPath();
-    if (sm.length === 2) {
-      ctx.moveTo(sm[0].x * sx, sm[0].y * sy);
-      ctx.lineTo(sm[1].x * sx, sm[1].y * sy);
-    } else {
-      ctx.moveTo(sm[0].x * sx, sm[0].y * sy);
-      for (let i = 1; i < sm.length - 1; i++) {
-        const midX = (sm[i].x + sm[i + 1].x) / 2;
-        const midY = (sm[i].y + sm[i + 1].y) / 2;
-        ctx.quadraticCurveTo(sm[i].x * sx, sm[i].y * sy, midX * sx, midY * sy);
-      }
-      const last = sm[sm.length - 1];
-      ctx.lineTo(last.x * sx, last.y * sy);
+    ctx.moveTo(pts[0].x * sx, pts[0].y * sy);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i].x * sx, pts[i].y * sy);
     }
     ctx.stroke();
-    ctx.restore();
   }
 
   function redraw() {
@@ -551,10 +493,9 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        // Both user strokes and the reference are now constant-width;
-        // lerp between them so the thicker user weight settles into
-        // the slightly thinner reference width as the morph completes.
-        const startW = userStrokeWidthPx();
+        // Lerp lineWidth from the user's drawing weight (same formula as
+        // drawStroke) to the reference stroke weight as the morph settles.
+        const startW = Math.max(4, canvas.width / 26);
         const endW = refStrokePx();
         ctx.lineWidth = startW + (endW - startW) * e;
 
