@@ -59,8 +59,23 @@
     const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     return v || fallback;
   }
-  const accentColor = () => cssVar('--accent', '#E76A3A');
-  const inkColor    = () => cssVar('--ink-2', '#5F4E3A');
+  /** Cache the resolved accent color keyed by the active theme so
+   *  drawStroke doesn't force a getComputedStyle on every pointermove.
+   *  `getComputedStyle` is expensive on iPad — hitting it 60-120× a
+   *  second was breaking up the drawing flow into chunks. */
+  let _accentCache = '';
+  let _accentCacheTheme = '';
+  const accentColor = (): string => {
+    const theme = typeof document !== 'undefined'
+      ? document.documentElement.getAttribute('data-theme') ?? ''
+      : '';
+    if (theme !== _accentCacheTheme || !_accentCache) {
+      _accentCacheTheme = theme;
+      _accentCache = cssVar('--accent', '#E76A3A');
+    }
+    return _accentCache;
+  };
+  const inkColor = () => cssVar('--ink-2', '#5F4E3A');
 
   /** Parse `#rgb` / `#rrggbb` / `rgb(r, g, b)` → [r, g, b]. Used by the morph
    *  animation which has to lerp in RGB space. Returns null on anything else
@@ -187,11 +202,32 @@
     ctx.stroke();
   }
 
+  /** Append-only paint of a single segment between two points. Used by
+   *  onMove so a pointermove only costs ONE ctx.stroke(), not a full-
+   *  canvas clear + re-stroke of every prior stroke. Huge iPad win at
+   *  60-120 Hz pointer sampling. */
+  function drawSegment(a: Point, b: Point, color: string) {
+    if (!ctx) return;
+    const sx = canvas.width / VB;
+    const sy = canvas.height / VB;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = userStrokeWidthPx();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(a.x * sx, a.y * sy);
+    ctx.lineTo(b.x * sx, b.y * sy);
+    ctx.stroke();
+  }
+
+  /** Full canvas refresh — clear + re-paint every committed stroke.
+   *  Only called on reset / new-kanji / pointerdown; NOT per move. */
   function redraw() {
     clearCanvas();
     const c = accentColor();
     for (const s of userStrokes) drawStroke(s, c);
-    if (drawing && currentPoints.length) drawStroke(currentPoints, c);
+    // In-progress stroke is appended to canvas incrementally via
+    // drawSegment in onMove — no need to re-stroke it here.
   }
 
   function canvasPoint(e: PointerEvent): Point {
@@ -306,17 +342,18 @@
     // Hide reference strokes on first touch.
     if (refVisible) hideRef();
     drawing = true;
-    // Wrap setPointerCapture: it can throw on non-trusted events (e.g. synthetic
-    // pointer events from automation harnesses). If it fails we still capture
-    // points via the move handler; we just miss out on implicit capture.
     try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     currentPoints = [canvasPoint(e)];
   }
 
   function onMove(e: PointerEvent) {
     if (!drawing) return;
-    currentPoints.push(canvasPoint(e));
-    redraw();
+    const p = canvasPoint(e);
+    const prev = currentPoints[currentPoints.length - 1];
+    currentPoints.push(p);
+    // Incremental draw — paint only the new segment on top of the
+    // committed pixels instead of clearing + re-stroking everything.
+    if (prev) drawSegment(prev, p, accentColor());
   }
 
   function onUp() {
@@ -326,7 +363,8 @@
       userStrokes = [...userStrokes, currentPoints];
     }
     currentPoints = [];
-    redraw();
+    // Skip the post-commit redraw — the stroke's pixels are already
+    // on the canvas from the incremental onMove draws.
 
     // Auto-morph once the user has drawn enough strokes.
     if (
