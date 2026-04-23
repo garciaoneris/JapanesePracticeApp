@@ -9,7 +9,7 @@
   import { getDisplayName, setDisplayName } from '../lib/gamification/displayName';
   import { getGoalState, setGoalMinutes } from '../lib/gamification/goal';
   import { getStreakState } from '../lib/gamification/streak';
-  import { listJapaneseVoices, getPreferredVoiceName, setPreferredVoiceName, speakJa } from '../lib/speech/tts';
+  import { listJapaneseVoices, getPreferredVoiceName, setPreferredVoiceName, speakJa, kickVoiceLoad } from '../lib/speech/tts';
 
   type Theme = 'washi' | 'neon' | 'sakura';
   const THEMES: { id: Theme; name: string; subtitle: string; swatch: [string, string, string] }[] = [
@@ -130,6 +130,16 @@
   }
   function testVoice() {
     speakJa('こんにちは、日本語の練習を始めましょう。');
+  }
+  let voiceLoading = $state(false);
+  async function handleLoadVoices() {
+    voiceLoading = true;
+    try {
+      japaneseVoices = await kickVoiceLoad();
+      selectedVoiceName = (await getPreferredVoiceName()) ?? '';
+    } finally {
+      voiceLoading = false;
+    }
   }
 
   // ── Your progress snapshot ───────────────────────────────────
@@ -307,6 +317,14 @@
     <div class="card-label">Japanese TTS voice</div>
     {#if japaneseVoices.length === 0}
       <p class="desc">No Japanese voices detected on this device.</p>
+      <div class="btn-row">
+        <button class="btn-primary" onclick={handleLoadVoices} disabled={voiceLoading}>
+          {voiceLoading ? 'Loading…' : 'Load voices'}
+        </button>
+      </div>
+      <p class="desc" style="margin-top:8px; font-size:12px; opacity:0.75;">
+        On iPadOS/iOS Safari, tap once to unlock system voices (Kyoko, Otoya, Siri).
+      </p>
     {:else}
       <select class="voice-select" bind:value={selectedVoiceName} onchange={handleVoiceChange}>
         <option value="">Auto (prefer Siri 2)</option>

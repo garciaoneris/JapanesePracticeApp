@@ -1,32 +1,64 @@
 import { getMeta, putMeta } from '../data/db';
 
-let voicesReady: Promise<SpeechSynthesisVoice[]> | null = null;
 let preferredLoaded = false;
 let preferredVoiceName: string | null = null;
 
-function loadVoices(): Promise<SpeechSynthesisVoice[]> {
-  if (voicesReady) return voicesReady;
-  voicesReady = new Promise((resolve) => {
+// iPadOS 16 Safari quirk: getVoices() often returns [] until a speak() has
+// occurred, and voiceschanged may fire late or never. Poll for up to 5s and
+// never cache an empty result.
+function loadVoices(timeoutMs = 5000): Promise<SpeechSynthesisVoice[]> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      resolve([]);
+      return;
+    }
     const synth = window.speechSynthesis;
     const now = synth.getVoices();
     if (now.length) {
       resolve(now);
       return;
     }
-    const handler = () => {
-      synth.removeEventListener('voiceschanged', handler);
-      resolve(synth.getVoices());
+    let done = false;
+    const finish = (v: SpeechSynthesisVoice[]) => {
+      if (done) return;
+      done = true;
+      synth.removeEventListener('voiceschanged', onChange);
+      clearInterval(poll);
+      clearTimeout(bail);
+      resolve(v);
     };
-    synth.addEventListener('voiceschanged', handler);
-    // Fallback: some browsers never fire the event.
-    setTimeout(() => resolve(synth.getVoices()), 1500);
+    const onChange = () => {
+      const v = synth.getVoices();
+      if (v.length) finish(v);
+    };
+    synth.addEventListener('voiceschanged', onChange);
+    const poll = setInterval(() => {
+      const v = synth.getVoices();
+      if (v.length) finish(v);
+    }, 200);
+    const bail = setTimeout(() => finish(synth.getVoices()), timeoutMs);
   });
-  return voicesReady;
 }
 
 export async function listJapaneseVoices(): Promise<SpeechSynthesisVoice[]> {
   const voices = await loadVoices();
   return voices.filter((v) => v.lang.toLowerCase().startsWith('ja'));
+}
+
+// User-gesture kick: some iOS/iPadOS versions only populate getVoices() after
+// a speak() has fired. Speak a silent/short utterance then re-poll.
+export async function kickVoiceLoad(): Promise<SpeechSynthesisVoice[]> {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return [];
+  try {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    u.lang = 'ja-JP';
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch {
+    // ignore
+  }
+  return listJapaneseVoices();
 }
 
 async function ensurePreferredLoaded(): Promise<void> {
