@@ -13,8 +13,8 @@
   import GoalRing from '../lib/ui/GoalRing.svelte';
   import KanjiTile, { type TileTier } from '../lib/ui/KanjiTile.svelte';
 
-  import { getXpState, type XpState } from '../lib/gamification/xp';
-  import { getGoalState, type GoalState } from '../lib/gamification/goal';
+  import { getXpState, type XpState, getXpLog } from '../lib/gamification/xp';
+  import { getGoalState, type GoalState, todayIso } from '../lib/gamification/goal';
   import { getStreakState } from '../lib/gamification/streak';
   import { resolveKotd } from '../lib/gamification/kotd';
   import { getDisplayName } from '../lib/gamification/displayName';
@@ -71,6 +71,52 @@
 
   let kotdChar = $state('');
   let dueCount = $state(0);
+  let xpLog = $state<Record<string, number>>({});
+  let weekExpanded = $state(false);
+
+  function isoWeekStart(iso: string): string {
+    const d = new Date(iso + 'T00:00:00');
+    const day = d.getDay();
+    d.setDate(d.getDate() - ((day + 6) % 7));
+    return todayIso(d);
+  }
+
+  const MONTH_KANJI = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二'] as const;
+
+  function weekLabel(weekStartIso: string): string {
+    const d = new Date(weekStartIso + 'T00:00:00');
+    const month = MONTH_KANJI[d.getMonth()];
+    const weekNum = Math.ceil(d.getDate() / 7);
+    return `${month}月　第${weekNum}週`;
+  }
+
+  const currentWeekDays = $derived.by(() => {
+    const today = todayIso();
+    const now = new Date();
+    const dow = now.getDay();
+    const mon = new Date(now);
+    mon.setDate(now.getDate() - ((dow + 6) % 7));
+    mon.setHours(0, 0, 0, 0);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(mon);
+      d.setDate(mon.getDate() + i);
+      const iso = todayIso(d);
+      return { iso, label: ['月', '火', '水', '木', '金', '土', '日'][i], xp: xpLog[iso] ?? 0, isToday: iso === today };
+    });
+  });
+
+  const weekMax = $derived(Math.max(...currentWeekDays.map(d => d.xp), 1));
+
+  const weekGroups = $derived.by(() => {
+    const groups: Record<string, number> = {};
+    for (const [date, xp] of Object.entries(xpLog)) {
+      const ws = isoWeekStart(date);
+      groups[ws] = (groups[ws] ?? 0) + xp;
+    }
+    const sorted = Object.entries(groups).sort(([a], [b]) => b.localeCompare(a));
+    const maxXp = Math.max(...sorted.map(([, x]) => x), 1);
+    return sorted.map(([ws, xp]) => ({ label: weekLabel(ws), xp, pct: (xp / maxXp) * 100 }));
+  });
 
   // ── Due count for the Review action card ──────────────────────────
   async function countDueAndFill(): Promise<number> {
@@ -109,6 +155,7 @@
     kotdChar = await resolveKotd(Object.keys(b.kanji), mastered);
 
     dueCount = await countDueAndFill();
+    xpLog = await getXpLog();
   });
 
   // ── Tile tier derivation (same logic as before, returned as TileTier) ─
@@ -189,13 +236,6 @@
     speakJa(r.replace(/[.\-]/g, ''));
   }
 
-  // ── XP bar ───────────────────────────────────────────────────────
-  const xpBarPct = $derived(
-    xpState.levelSpan > 0 ? Math.min(1, xpState.intoLevel / xpState.levelSpan) : 0,
-  );
-  const xpLine = $derived(
-    `${xpState.intoLevel.toLocaleString()} / ${xpState.levelSpan.toLocaleString()} XP`,
-  );
 </script>
 
 <div class="screen home-screen">
@@ -223,7 +263,9 @@
   </header>
 
   <!-- ── Hero card: goal ring + XP ──────────────────────────── -->
-  <section class="hero">
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <section class="hero" onclick={() => weekExpanded = !weekExpanded}>
     <!-- Drifting petals deliberately omitted on Home: the grid below was
          the iPad perf hot spot, and removing the hero's continuous SVG
          animation keeps the whole screen still. Learn + Complete still
@@ -247,13 +289,32 @@
       </div>
     </div>
 
-    <div class="xp-row">
-      <div class="level-pill">
-        <span class="bloom-icon"><Blossom size={16} /></span>
-        Lv {xpState.level}
-      </div>
-      <div class="xp-bar"><div class="xp-fill" style="width: {xpBarPct * 100}%;"></div></div>
-      <div class="xp-numbers tnum">{xpLine}</div>
+    <div class="week-strip">
+      {#if !weekExpanded}
+        <div class="week-days">
+          {#each currentWeekDays as { label, xp, isToday }}
+            <div class="week-day" class:today={isToday}>
+              <div class="day-bar-wrap">
+                <div class="day-bar" style="height: {Math.max(2, Math.round(xp / weekMax * 44))}px;"></div>
+              </div>
+              <div class="day-lbl jp-serif">{label}</div>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="week-history">
+          {#each weekGroups as { label, xp, pct }}
+            <div class="week-hist-row">
+              <span class="wh-label">{label}</span>
+              <div class="wh-bar-wrap"><div class="wh-bar" style="width: {pct}%;"></div></div>
+              <span class="wh-xp tnum">{xp} XP</span>
+            </div>
+          {/each}
+          {#if weekGroups.length === 0}
+            <div class="wh-empty">練習すると週ごとのXPが表示されます</div>
+          {/if}
+        </div>
+      {/if}
     </div>
   </section>
 
@@ -461,50 +522,103 @@
     margin-left: 2px;
   }
 
-  .xp-row {
+  .hero { cursor: pointer; }
+
+  .week-strip {
     position: relative;
     z-index: 1;
-    margin-top: 16px;
+    margin-top: 14px;
     display: flex;
-    align-items: center;
-    gap: 12px;
+    align-items: flex-end;
+    gap: 8px;
   }
-  .level-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.72);
-    border: 1px solid var(--border);
-    font-weight: 800;
-    font-size: 13px;
-    color: var(--ink);
-    /* backdrop-filter dropped for iPad compositor budget — solid fill
-       covers what we need over the hero-grad. */
-  }
-  .bloom-icon { color: var(--accent-2); display: flex; }
-  :global([data-theme='neon']) .level-pill { background: rgba(255, 255, 255, 0.1); }
-  .xp-bar {
+  .week-days {
     flex: 1;
-    height: 10px;
-    background: rgba(255, 255, 255, 0.35);
-    border-radius: 999px;
-    overflow: hidden;
-    border: 1px solid var(--border);
+    display: flex;
+    gap: 3px;
+    align-items: stretch;
+    height: 60px;
   }
-  :global([data-theme='neon']) .xp-bar { background: rgba(255, 255, 255, 0.08); }
-  .xp-fill {
-    height: 100%;
+  .week-day {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .day-bar-wrap {
+    flex: 1;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+  }
+  .day-bar {
+    width: 55%;
+    border-radius: 3px 3px 0 0;
+    background: rgba(255, 255, 255, 0.28);
+    transition: height 0.3s ease;
+  }
+  .week-day.today .day-bar {
     background: var(--gradient-brand);
-    border-radius: 999px;
-    box-shadow: 0 0 12px color-mix(in oklab, var(--accent) 60%, transparent);
+    box-shadow: 0 0 10px color-mix(in oklab, var(--accent) 55%, transparent);
   }
-  .xp-numbers {
+  .day-lbl {
     font-size: 12px;
     font-weight: 700;
     color: var(--ink-2);
+    margin-top: 3px;
+    flex-shrink: 0;
+  }
+  .week-day.today .day-lbl { color: var(--accent); }
+  /* ── Weekly history (in-place) ───────────────────────────── */
+  .week-history {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 7px;
+  }
+  .week-hist-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .wh-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ink-2);
     white-space: nowrap;
+    width: 90px;
+    flex-shrink: 0;
+  }
+  .wh-bar-wrap {
+    flex: 1;
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .wh-bar {
+    height: 100%;
+    background: var(--gradient-brand);
+    border-radius: 999px;
+    min-width: 2px;
+  }
+  .wh-xp {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ink-2);
+    white-space: nowrap;
+    width: 52px;
+    text-align: right;
+  }
+  .wh-empty {
+    font-size: 12px;
+    color: var(--ink-2);
+    font-style: italic;
+    text-align: center;
+    padding: 4px 0;
   }
 
   /* ── Action cards ────────────────────────────────────────── */

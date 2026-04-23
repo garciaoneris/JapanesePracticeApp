@@ -4,6 +4,11 @@
 
 import { getMeta, putMeta } from '../data/db';
 import { notifyXpGain } from './xpToast';
+import { todayIso } from './goal';
+
+export async function getXpLog(): Promise<Record<string, number>> {
+  return (await getMeta<Record<string, number>>('xp-log')) ?? {};
+}
 
 /** Cumulative XP required to reach the START of level n (n >= 1).
  *  Level 1 starts at 0 XP; level 2 at 200; level 14 at 21,000. */
@@ -50,6 +55,10 @@ export async function addXp(delta: number): Promise<{ state: XpState; leveledUp:
   const rounded = Math.round(delta);
   const next = prev + rounded;
   await putMeta('xp', next);
+  const log = (await getMeta<Record<string, number>>('xp-log')) ?? {};
+  const today = todayIso();
+  log[today] = (log[today] ?? 0) + rounded;
+  await putMeta('xp-log', log);
   const nextLevel = levelForXp(next);
   if (nextLevel !== prevLevel) await putMeta('level', nextLevel);
   // Surface the gain to the global <XpToast /> so the learner sees a
