@@ -1,4 +1,8 @@
+import { getMeta, putMeta } from '../data/db';
+
 let voicesReady: Promise<SpeechSynthesisVoice[]> | null = null;
+let preferredLoaded = false;
+let preferredVoiceName: string | null = null;
 
 function loadVoices(): Promise<SpeechSynthesisVoice[]> {
   if (voicesReady) return voicesReady;
@@ -20,11 +24,43 @@ function loadVoices(): Promise<SpeechSynthesisVoice[]> {
   return voicesReady;
 }
 
-async function pickJapaneseVoice(): Promise<SpeechSynthesisVoice | null> {
+export async function listJapaneseVoices(): Promise<SpeechSynthesisVoice[]> {
   const voices = await loadVoices();
-  const ja = voices.filter((v) => v.lang.toLowerCase().startsWith('ja'));
+  return voices.filter((v) => v.lang.toLowerCase().startsWith('ja'));
+}
+
+async function ensurePreferredLoaded(): Promise<void> {
+  if (preferredLoaded) return;
+  preferredLoaded = true;
+  preferredVoiceName = (await getMeta<string>('tts-voice-name')) ?? null;
+}
+
+export async function getPreferredVoiceName(): Promise<string | null> {
+  await ensurePreferredLoaded();
+  return preferredVoiceName;
+}
+
+export async function setPreferredVoiceName(name: string | null): Promise<void> {
+  preferredVoiceName = name && name.length > 0 ? name : null;
+  preferredLoaded = true;
+  await putMeta('tts-voice-name', preferredVoiceName);
+}
+
+async function pickJapaneseVoice(): Promise<SpeechSynthesisVoice | null> {
+  const ja = await listJapaneseVoices();
   if (!ja.length) return null;
-  return ja.find((v) => v.name.includes('Kyoko')) ?? ja.find((v) => v.name.includes('Otoya')) ?? ja[0];
+  await ensurePreferredLoaded();
+  if (preferredVoiceName) {
+    const match = ja.find((v) => v.name === preferredVoiceName);
+    if (match) return match;
+  }
+  // Auto-selection order: Siri 2 (iPadOS 17+) → Kyoko → Otoya → first.
+  return (
+    ja.find((v) => /siri.*(?:voice\s*)?2/i.test(v.name)) ??
+    ja.find((v) => v.name.includes('Kyoko')) ??
+    ja.find((v) => v.name.includes('Otoya')) ??
+    ja[0]
+  );
 }
 
 /**

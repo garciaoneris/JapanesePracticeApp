@@ -9,6 +9,7 @@
   import { getDisplayName, setDisplayName } from '../lib/gamification/displayName';
   import { getGoalState, setGoalMinutes } from '../lib/gamification/goal';
   import { getStreakState } from '../lib/gamification/streak';
+  import { listJapaneseVoices, getPreferredVoiceName, setPreferredVoiceName, speakJa } from '../lib/speech/tts';
 
   type Theme = 'washi' | 'neon' | 'sakura';
   const THEMES: { id: Theme; name: string; subtitle: string; swatch: [string, string, string] }[] = [
@@ -120,6 +121,17 @@
     schedulePush();
   }
 
+  // ── Voice ────────────────────────────────────────────────────
+  let japaneseVoices = $state<SpeechSynthesisVoice[]>([]);
+  let selectedVoiceName = $state<string>('');
+  async function handleVoiceChange() {
+    await setPreferredVoiceName(selectedVoiceName || null);
+    schedulePush();
+  }
+  function testVoice() {
+    speakJa('こんにちは、日本語の練習を始めましょう。');
+  }
+
   // ── Your progress snapshot ───────────────────────────────────
   let masteredCount = $state(0);
   let goldCount = $state(0);
@@ -144,6 +156,8 @@
     const g = await getGoalState();
     goalMinutes = g.goalMinutes;
     await refreshProgress();
+    japaneseVoices = await listJapaneseVoices();
+    selectedVoiceName = (await getPreferredVoiceName()) ?? '';
   });
 
   async function handleSave() {
@@ -285,6 +299,25 @@
       </div>
       <input type="checkbox" bind:checked={nativeMode} onchange={handleNativeToggle} />
     </label>
+  </div>
+
+  <!-- ── Voice ────────────────────────────────────────────── -->
+  <div class="section-label">Voice</div>
+  <div class="card">
+    <div class="card-label">Japanese TTS voice</div>
+    {#if japaneseVoices.length === 0}
+      <p class="desc">No Japanese voices detected on this device.</p>
+    {:else}
+      <select class="voice-select" bind:value={selectedVoiceName} onchange={handleVoiceChange}>
+        <option value="">Auto (prefer Siri 2)</option>
+        {#each japaneseVoices as v (v.name)}
+          <option value={v.name}>{v.name} — {v.lang}</option>
+        {/each}
+      </select>
+      <div class="btn-row">
+        <button class="btn-primary" onclick={testVoice}>Test voice</button>
+      </div>
+    {/if}
   </div>
 
   <!-- ── Your progress ────────────────────────────────────── -->
@@ -496,6 +529,19 @@
     width: 16px; height: 16px;
     margin: 0;
   }
+
+  .voice-select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+  }
+  .voice-select:focus { border-color: var(--accent); }
 
   .row-toggle {
     display: flex; align-items: center; gap: 12px;
