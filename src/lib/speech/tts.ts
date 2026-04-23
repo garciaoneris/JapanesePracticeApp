@@ -50,9 +50,11 @@ export async function listJapaneseVoices(): Promise<SpeechSynthesisVoice[]> {
 export async function kickVoiceLoad(): Promise<SpeechSynthesisVoice[]> {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return [];
   try {
-    const u = new SpeechSynthesisUtterance(' ');
-    u.volume = 0;
+    // Audible short utterance so the user gets feedback that TTS works, even
+    // if getVoices() stays empty (iPadOS 16 Safari never populates the list).
+    const u = new SpeechSynthesisUtterance('テスト');
     u.lang = 'ja-JP';
+    u.rate = 1;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
   } catch {

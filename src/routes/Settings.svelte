@@ -316,15 +316,16 @@
   <div class="card">
     <div class="card-label">Japanese TTS voice</div>
     {#if japaneseVoices.length === 0}
-      <p class="desc">No Japanese voices detected on this device.</p>
-      <div class="btn-row">
+      <p class="desc">Voice list unavailable — the system default Japanese voice will be used.</p>
+      <p class="desc" style="margin-top:6px; font-size:12px; opacity:0.75;">
+        iPadOS / iOS Safari doesn't expose the voice list to web pages. Tap Test voice to confirm TTS is working; tap Reload voice list if you want to try populating the picker.
+      </p>
+      <div class="btn-row" style="gap:8px;">
+        <button class="btn-primary" onclick={testVoice}>Test voice</button>
         <button class="btn-primary" onclick={handleLoadVoices} disabled={voiceLoading}>
-          {voiceLoading ? 'Loading…' : 'Load voices'}
+          {voiceLoading ? 'Loading…' : 'Reload voice list'}
         </button>
       </div>
-      <p class="desc" style="margin-top:8px; font-size:12px; opacity:0.75;">
-        On iPadOS/iOS Safari, tap once to unlock system voices (Kyoko, Otoya, Siri).
-      </p>
     {:else}
       <select class="voice-select" bind:value={selectedVoiceName} onchange={handleVoiceChange}>
         <option value="">Auto (prefer Siri 2)</option>
