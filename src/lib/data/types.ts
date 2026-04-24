@@ -63,6 +63,8 @@ export interface Word {
   id: string;
   jp: string;
   reading: string;
+  /** Additional accepted readings (e.g. さつきあめ alongside the canonical さみだれ). */
+  altReadings?: string[];
   meanings: string[];
   kanji: string[];
   examples: Example[];

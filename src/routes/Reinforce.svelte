@@ -19,6 +19,7 @@
     instruction: string;
     choices: string[];
     correct: string;
+    corrects: string[];
     speakText: string;
   };
 
@@ -82,6 +83,7 @@
         instruction: 'What does this mean?',
         choices,
         correct,
+        corrects: [correct],
         speakText: k.kun[0] ?? k.on[0] ?? k.char,
       };
     }
@@ -89,20 +91,21 @@
     const w = b.words[m.id];
     if (!w) return null;
     if (m.type === 'word-reading') {
-      const correct = w.reading;
+      const allCorrect = [w.reading, ...(w.altReadings ?? [])];
       const pool: string[] = [];
       for (const other of Object.values(b.words)) {
-        if (other.reading && other.reading !== correct) pool.push(other.reading);
+        if (other.reading && !allCorrect.includes(other.reading)) pool.push(other.reading);
       }
       const distractors = shuffle(pool).slice(0, 3);
-      const choices = shuffle([correct, ...distractors]);
+      const choices = shuffle([...allCorrect, ...distractors].filter((v, i, a) => a.indexOf(v) === i).slice(0, 4));
       return {
         mistake: m,
         kind: 'choice',
         prompt: w.jp,
         instruction: 'What is the reading?',
         choices,
-        correct,
+        correct: w.reading,
+        corrects: allCorrect,
         speakText: w.jp,
       };
     }
@@ -124,6 +127,7 @@
       instruction: 'What does this mean?',
       choices,
       correct,
+      corrects: [correct],
       speakText: w.jp,
     };
   }
@@ -169,7 +173,7 @@
   async function pickChoice(i: number) {
     if (picked !== null || !current || current.kind !== 'choice') return;
     picked = i;
-    const isCorrect = current.choices[i] === current.correct;
+    const isCorrect = current.corrects.includes(current.choices[i]);
     await recordOutcome(isCorrect);
   }
 
@@ -269,9 +273,9 @@
     {#each current.choices as choice, i}
       <button
         class="choice-btn"
-        class:correct={picked !== null && choice === current.correct}
-        class:wrong={picked !== null && i === picked && choice !== current.correct}
-        class:dimmed={picked !== null && choice !== current.correct && i !== picked}
+        class:correct={picked !== null && current.corrects.includes(choice)}
+        class:wrong={picked !== null && i === picked && !current.corrects.includes(choice)}
+        class:dimmed={picked !== null && !current.corrects.includes(choice) && i !== picked}
         disabled={picked !== null}
         onclick={() => pickChoice(i)}
       >

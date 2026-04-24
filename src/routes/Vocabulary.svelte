@@ -141,7 +141,7 @@
     word: Word;
     type: 'reading' | 'meaning';
     choices: string[];
-    correctIdx: number;
+    correctIdxs: number[];
   }
 
   let quizQuestions = $state<QuizQuestion[]>([]);
@@ -180,12 +180,14 @@
         const extra = buildDistractors(w.reading, allReadingPool, 3 - rDistractors.length);
         rDistractors = [...rDistractors, ...extra].slice(0, 3);
       }
-      const rChoices = shuffle([w.reading, ...rDistractors]);
+      const allCorrectReadings = [w.reading, ...(w.altReadings ?? [])];
+      const rChoices = shuffle([...allCorrectReadings, ...rDistractors].filter((v, i, a) => a.indexOf(v) === i).slice(0, 4));
+      const rCorrectIdxs = rChoices.map((c, i) => allCorrectReadings.includes(c) ? i : -1).filter(i => i >= 0);
       questions.push({
         word: w,
         type: 'reading',
         choices: rChoices,
-        correctIdx: rChoices.indexOf(w.reading),
+        correctIdxs: rCorrectIdxs,
       });
 
       // Meaning question — filter romaji-looking distractors
@@ -200,7 +202,7 @@
         word: w,
         type: 'meaning',
         choices: mChoices,
-        correctIdx: mChoices.indexOf(correctMeaning),
+        correctIdxs: [mChoices.indexOf(correctMeaning)],
       });
     }
 
@@ -215,7 +217,7 @@
   function pickAnswer(idx: number): void {
     if (quizPicked !== null) return;
     quizPicked = idx;
-    const isCorrect = idx === currentQuestion.correctIdx;
+    const isCorrect = currentQuestion.correctIdxs.includes(idx);
     if (isCorrect) {
       quizCorrectCount++;
     } else {
@@ -462,9 +464,9 @@
         {#each currentQuestion.choices as choice, i}
           <button
             class="choice-btn"
-            class:correct={quizPicked !== null && i === currentQuestion.correctIdx}
-            class:wrong={quizPicked !== null && i === quizPicked && i !== currentQuestion.correctIdx}
-            class:dimmed={quizPicked !== null && i !== currentQuestion.correctIdx && i !== quizPicked}
+            class:correct={quizPicked !== null && currentQuestion.correctIdxs.includes(i)}
+            class:wrong={quizPicked !== null && i === quizPicked && !currentQuestion.correctIdxs.includes(i)}
+            class:dimmed={quizPicked !== null && !currentQuestion.correctIdxs.includes(i) && i !== quizPicked}
             disabled={quizPicked !== null}
             onclick={() => pickAnswer(i)}
           >
