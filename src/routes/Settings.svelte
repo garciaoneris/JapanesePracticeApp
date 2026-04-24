@@ -9,8 +9,6 @@
   import { getDisplayName, setDisplayName } from '../lib/gamification/displayName';
   import { getGoalState, setGoalMinutes } from '../lib/gamification/goal';
   import { getStreakState } from '../lib/gamification/streak';
-  import { listJapaneseVoices, getPreferredVoiceName, setPreferredVoiceName, speakJa, kickVoiceLoad } from '../lib/speech/tts';
-
   type Theme = 'washi' | 'neon' | 'sakura';
   const THEMES: { id: Theme; name: string; subtitle: string; swatch: [string, string, string] }[] = [
     { id: 'washi',  name: 'Warm Washi', subtitle: 'Paper & sunset — calm & traditional', swatch: ['#FBF4E6', '#E76A3A', '#F2B138'] },
@@ -121,28 +119,7 @@
     schedulePush();
   }
 
-  // ── Voice ────────────────────────────────────────────────────
-  let japaneseVoices = $state<SpeechSynthesisVoice[]>([]);
-  let selectedVoiceName = $state<string>('');
-  async function handleVoiceChange() {
-    await setPreferredVoiceName(selectedVoiceName || null);
-    schedulePush();
-  }
-  function testVoice() {
-    speakJa('こんにちは、日本語の練習を始めましょう。');
-  }
-  let voiceLoading = $state(false);
-  async function handleLoadVoices() {
-    voiceLoading = true;
-    try {
-      japaneseVoices = await kickVoiceLoad();
-      selectedVoiceName = (await getPreferredVoiceName()) ?? '';
-    } finally {
-      voiceLoading = false;
-    }
-  }
-
-  // ── Your progress snapshot ───────────────────────────────────
+// ── Your progress snapshot ───────────────────────────────────
   let masteredCount = $state(0);
   let goldCount = $state(0);
   let streakDays = $state(0);
@@ -166,8 +143,6 @@
     const g = await getGoalState();
     goalMinutes = g.goalMinutes;
     await refreshProgress();
-    japaneseVoices = await listJapaneseVoices();
-    selectedVoiceName = (await getPreferredVoiceName()) ?? '';
   });
 
   async function handleSave() {
@@ -311,35 +286,7 @@
     </label>
   </div>
 
-  <!-- ── Voice ────────────────────────────────────────────── -->
-  <div class="section-label">Voice</div>
-  <div class="card">
-    <div class="card-label">Japanese TTS voice</div>
-    {#if japaneseVoices.length === 0}
-      <p class="desc">Voice list unavailable — the system default Japanese voice will be used.</p>
-      <p class="desc" style="margin-top:6px; font-size:12px; opacity:0.75;">
-        iPadOS / iOS Safari doesn't expose the voice list to web pages. Tap Test voice to confirm TTS is working; tap Reload voice list if you want to try populating the picker.
-      </p>
-      <div class="btn-row" style="gap:8px;">
-        <button class="btn-primary" onclick={testVoice}>Test voice</button>
-        <button class="btn-primary" onclick={handleLoadVoices} disabled={voiceLoading}>
-          {voiceLoading ? 'Loading…' : 'Reload voice list'}
-        </button>
-      </div>
-    {:else}
-      <select class="voice-select" bind:value={selectedVoiceName} onchange={handleVoiceChange}>
-        <option value="">Auto (prefer Siri 2)</option>
-        {#each japaneseVoices as v (v.name)}
-          <option value={v.name}>{v.name} — {v.lang}</option>
-        {/each}
-      </select>
-      <div class="btn-row">
-        <button class="btn-primary" onclick={testVoice}>Test voice</button>
-      </div>
-    {/if}
-  </div>
-
-  <!-- ── Your progress ────────────────────────────────────── -->
+<!-- ── Your progress ────────────────────────────────────── -->
   <div class="section-label">Your progress</div>
   <div class="card progress-card">
     <div class="progress-col">
@@ -548,19 +495,6 @@
     width: 16px; height: 16px;
     margin: 0;
   }
-
-  .voice-select {
-    width: 100%;
-    padding: 10px 12px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--ink);
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-  }
-  .voice-select:focus { border-color: var(--accent); }
 
   .row-toggle {
     display: flex; align-items: center; gap: 12px;
